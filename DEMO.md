@@ -35,9 +35,10 @@ plate camera.
 3. **Warm-up run.** The first analysis downloads and loads the models (plate detector,
    OCR, clock reader), which adds a minute or two. Run v2 once on
    `2026-10-26_15-22-54` (steps 1-7 below) so this does not happen in front of people.
-4. **Optional, to save time on the day:** also run v1 on the same pair in advance. v1
-   takes several minutes per pair. During the demo you can then show its finished result
-   from **Previous analyses** while v2 runs live.
+4. **v1 results are already there.** **Previous analyses** holds a v1 run of every sample
+   pair, so you do not need to run v1 live. That matters because v1 is slow: about 4 minutes
+   for the 12 s pair, against 75 s for v2. To show a fresh v1 run anyway, start it before the
+   audience arrives.
 
 ## The demo, step by step
 
@@ -54,16 +55,19 @@ plate camera.
    camera), or draw the dumping area by clicking points on the frame.
 4. **Choose the version.** Next to *Start analysis*, click **v1** or **v2**.
 5. **Start analysis.** Point out, as it runs:
-   - the live view with the tracked vehicles;
+   - the live view: vehicles near the litter zone, and the culprit boxed in red with its
+     waste for a few seconds after a throw;
    - *Syncing cameras*, then the offset that was found;
    - events appearing in **Evidence** as they are detected.
 6. **Match log.** One row per throw: the clock time, a snapshot of the throw, the same
    vehicle in the zoomed camera (vehicle and plate boxed), the plate image, and the OCR
    result. A confirmed plate is shown in full. A partly read plate shows its unclear
-   characters highlighted, with their likely values (e.g. `10th: 6 (55%) or 0 (43%)`).
+   characters highlighted, with their likely values and look-alikes (e.g.
+   `10th: 6 (55%) or 0 (43%), looks like 3/8/9`). Until the plate camera has found the
+   vehicle, the row says *matching in the plate camera…*; it fills in within seconds.
 7. **How the plate was found.** On an event card, open *How this plate was found*. It
-   shows which vehicles passed the plate camera at that time, how each scored on type,
-   colour and timing, which one was picked, and what each plate reader said.
+   shows the vehicle that was picked on the plate camera (out of how many passed at that
+   time), how it scored on type, colour and timing, and what each plate reader said.
 8. **Run the other version.** The videos stay selected. Switch to the other version and
    click **Start analysis** again.
 9. **Compare.** Use **Previous analyses** (top right). Each entry is labelled `V1` or `V2`.

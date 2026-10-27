@@ -1291,6 +1291,8 @@ class WasteDetector:
     def _apply_platecam(self, ev, res):
         if not res:
             return
+        if ev.get("plate_status") == "pending":
+            ev["plate_status"] = "unreadable"      # set again below when a number was read
         keep = ("status", "error", "frames", "vehicles_seen", "match_score", "appearance", "time_gap",
                 "type_ok", "ambiguous", "vehicle_class", "votes", "seen_from", "seen_to", "frame_time", "secs",
                 "plate_type", "trace")

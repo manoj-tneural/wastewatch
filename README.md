@@ -66,27 +66,29 @@ the plate.
 How it works (`v2/plate_cam.py`):
 1. The plate camera runs all the time in its own thread. Every vehicle that passes is
    tracked on every frame; its sharpest plate crops and best photos are kept **in memory
-   only**, and it gets a quick read as it leaves the view. Live, vehicles are forgotten
-   after 90 s (*plate_retention_sec*); nothing is written to disk unless the vehicle is
-   matched to a littering event.
+   only**. A plate is read only when the vehicle is matched to a littering event, so the
+   work goes where it matters. Live, vehicles are forgotten after 90 s
+   (*plate_retention_sec*); nothing is written to disk for vehicles that are not matched.
 2. When an event is confirmed, the culprit is picked from the vehicles that passed while
    it was in the overview (± *Plate cam margin*, default 4 s): same **type** (two-wheeler
    vs car/bus/truck), right **time**, closest **colour** to the overview snapshot (rider's
    clothes count for two-wheelers).
-3. Its plate gets a thorough read (see *Plate reading*). The original reader also reads
-   the same frames as a second opinion. If the two disagree, the plate is reported as a
-   best guess, not as the number.
+3. Its plate gets a thorough read (see *Plate reading*). When that read is not sure, the
+   original (v1) reader is asked as a second opinion on the same frames. If the two
+   disagree, the plate is reported as a best guess, not as the number.
 
 Each event then also has:
 
 | File | What it is |
 |---|---|
-| `plate_cam.jpg` | Plate camera frame with the matched vehicle boxed |
+| `plate_cam.jpg` | Plate camera frame where the plate is clearest, vehicle and plate boxed |
 | `plate_cam_vehicle.jpg` | The matched vehicle, close up |
-| `plate_cam_plate.jpg` | The plate crop the number was read from |
+| `plate_cam_plate.jpg` | The plate image the number was read from (only when a number was read) |
 
-`events.json` gets `plate_from` (`plate_cam` / `clip` / overview), `plate_votes`
-(e.g. `3/12` frames agree) and a `platecam` block with the match score. `ambiguous: true`
+`events.json` gets `clock` (time of day from the camera clock), `plate_text` (confirmed
+number), `plate_guess` and `plate_unclear` (best guess and its unclear characters),
+`plate_from`, `plate_votes` (e.g. `16 of 16 reads agree, 4 frames fused`) and a `platecam`
+block with the match score and a `trace` of how the vehicle was picked. `ambiguous: true`
 means two similar vehicles passed together — check the photo before issuing a notice.
 
 ### Recorded clips (testing)
@@ -155,14 +157,29 @@ python -m v2.detector "rtsp://user:pass@192.168.1.64:554/stream1" --plate "rtsp:
 VIGI cameras: main stream is usually `rtsp://user:pass@IP:554/stream1`. Live mode must keep
 up with the camera. *Live processing fps* (default 10) sets how many overview frames per second
 are analysed; on CPU use 6–8, on a GPU 25. The log warns when frames are still being dropped.
-The plate camera is buffered separately at full resolution, 8 frames per second, for the last 25 s.
+The plate camera is buffered separately at full resolution, 15 frames per second, for the last 30 s.
 
 ### Plate camera checklist
 - Points along the near lane at vehicles **leaving** the dumping spot (rear plates).
 - Plate at least **130 px wide** for cars and **~100 px** for two-wheeler plates in the
-  capture zone. Below ~100 px the OCR guesses and the two-frame rule rejects it.
-- Shutter 1/1000 s (day), 1/500 s (night), IR at night, H.265 (not H.265+), 25 fps, max bitrate.
+  capture zone. Below ~100 px the characters are unclear and the plate is only a best guess.
+- Fixed shutter 1/1000 s or faster, day and night, low gain, highlight (headlight)
+  compensation and IR at night. With a slower night shutter, plates blur and are washed
+  out by headlights; no software recovers them. H.265 (not H.265+), 25 fps, max bitrate.
 - Set both cameras to NTP / the NVR's time so their clocks match.
+
+## Dashboard
+
+- **Match log**: one row per throw with the clock time, the throw snapshot, the same
+  vehicle on the plate camera, the plate image and the OCR result. *How this plate was
+  found* on an event card shows how the culprit was picked and what each reader said.
+- **Detailed activity log**: sync, events, camera matching and plate decisions, also
+  saved as `log.txt` in the analysis folder. Evidence, Match log and the activity log
+  can each be collapsed.
+- **Previous analyses** lists every analysis in `outputs/` (newest first), including runs
+  cut off by a restart (*interrupted*). A command-line run can be added to it with
+  `python -m tools.import_run <out folder> --version v2 --pair source/<pair folder>`.
+- `DEMO.md` is a step-by-step guide to giving a demo.
 
 ## Tuning (Detection settings panel)
 
@@ -177,5 +194,6 @@ The plate camera is buffered separately at full resolution, 8 frames per second,
 | Model | `yolo11s/m` detect small/distant vehicles better (slower) |
 
 ## Next steps worth adding
+- Throw detection trained on labelled staged throws (the current one raises false events)
+- Plate OCR fine-tuned on Indian plates
 - Alerts (WhatsApp/SMS/email) on each event
-- A dedicated plate detector model if the plate camera view has many vehicles at once

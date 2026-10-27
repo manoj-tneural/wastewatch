@@ -600,9 +600,10 @@ function plateMarked(display, chars){
 
 /* match log: one row per throw */
 let mlogSig = '';
+let jobRunning = false;     // set by poll(): once false, nothing is "reading..." any more
 function renderMatchLog(evs){
   const rows = [...evs].sort((a,b)=>a.id-b.id);
-  const sig = rows.map(e=>`${e.id}-${e.plate_text||''}-${e.plate_guess||''}-${e.plate_status||''}-${(e.platecam||{}).status||''}-${(e.files||{}).pc_scene||''}-${(e.files||{}).scene||''}`).join('|');
+  const sig = (jobRunning?'r':'d') + rows.map(e=>`${e.id}-${e.plate_text||''}-${e.plate_guess||''}-${e.plate_status||''}-${(e.platecam||{}).status||''}-${(e.files||{}).pc_scene||''}-${(e.files||{}).scene||''}`).join('|');
   if(sig===mlogSig) return; mlogSig = sig;
   const body = $('#mlogBody');
   if(!rows.length){ body.innerHTML = '<tr><td colspan="5" class="empty">Rows appear here as each throw is matched to the plate camera.</td></tr>'; return; }
@@ -616,7 +617,7 @@ function renderMatchLog(evs){
     else if(e.plate_guess) ocr = `<div class="ocr">${plateMarked(e.plate_guess, e.plate_chars)}</div>
         <div class="sub">${e.plate_unclear?'partly read — highlighted characters are the most likely values, not certain':'every character read, but not confirmed (too few clear frames, or the two readers disagree) — check the plate'}</div>
         ${e.plate_unclear?`<div class="sub" style="color:var(--warn)">unclear ${esc(e.plate_unclear)}</div>`:''}`;
-    else ocr = `<div class="na">${e.plate_status==='pending'?'reading…':'not readable'}</div>`;
+    else ocr = `<div class="na" title="${jobRunning?'':'No plate number could be read for this vehicle'}">${jobRunning && (e.plate_status==='pending' || (pc && (pc.status==='waiting'||pc.status==='searching'))) ? 'reading…' : '–'}</div>`;
     if(e.plate_votes) ocr += `<div class="sub">${esc(e.plate_votes)}</div>`;
     if(pc.ambiguous) ocr += `<div class="sub" style="color:var(--warn)">⚠ a similar vehicle passed at the same time</div>`;
     return `<tr>
@@ -662,6 +663,7 @@ async function poll(){
   $('#stFrames').textContent = `${j.progress||0} / ${j.total||0}`; $('#stFps').textContent = j.fps||0; $('#stVideo').textContent = `${(j.version||'v2').toUpperCase()} · ` + (j.video_name||'–') + (j.plate_video_name ? `  +  plate cam (${j.live?'live':j.plate_sync?`${j.plate_offset>=0?'+':''}${j.plate_offset}s, ${j.plate_sync.method}`:'syncing…'})` : '');
   const running = st==='running'||st==='queued'||st==='syncing';
   $('#start').disabled = running || !video; $('#stop').style.display = running ? 'inline-block':'none';
+  jobRunning = running;
   renderEvents(j.events||[]);
   renderMatchLog(j.events||[]);
   pollLog();
@@ -685,7 +687,7 @@ function renderEvents(evs){
   $('#kPlate').textContent = Object.keys(plateCounts).length;
   evs.forEach(e=>{
     const pc = e.platecam || null;
-    const ver = `${e.gif_ready}-${e.snapshot_version||0}-${e.plate_text||''}-${e.plate_guess||''}-${e.plate_status||''}-${e.plate_from||''}-${e.hidden?1:0}-${pc?pc.status:''}-${pc&&pc.trace?pc.trace.decision:''}`;
+    const ver = `${jobRunning?1:0}-${e.gif_ready}-${e.snapshot_version||0}-${e.plate_text||''}-${e.plate_guess||''}-${e.plate_status||''}-${e.plate_from||''}-${e.hidden?1:0}-${pc?pc.status:''}-${pc&&pc.trace?pc.trace.decision:''}`;
     if(renderedVersions[e.id]===ver) return;
     renderedVersions[e.id]=ver;
     const base = `/files/${jobId}/${e.dir}/`, f = e.files||{}, v = e.snapshot_version||0;
@@ -697,7 +699,7 @@ function renderEvents(evs){
       : e.plate_status==='uncertain' && e.plate_guess
       ? `<div class="plate" style="font-size:20px">${plateMarked(e.plate_guess, e.plate_chars)}</div>
          <div class="plate-miss">${e.plate_unclear?`Partly read — the highlighted characters are the most likely values, check the plate photo<br>Unclear ${esc(e.plate_unclear)}`:'Every character read, but not confirmed (too few clear frames, or the two readers disagree) — check the plate photo'}</div>`
-      : `<div class="plate-miss">${e.plate_status==='unavailable'?'Plate reader unavailable':e.plate_status==='pending'?'Reading plate…':(f.plate?'Plate captured — number not read confidently':'Plate not readable')}</div>`;
+      : `<div class="plate-miss">${e.plate_status==='unavailable'?'Plate reader unavailable':(jobRunning && e.plate_status==='pending')?'Reading plate…':'Plate: –'}</div>`;
     const pcMsg = {waiting:'Plate camera: matching…', searching:'Plate camera: matching…', no_frames:'Plate camera: no footage for this time — check sync',
                    no_vehicle:'Plate camera: no vehicle found in that window', error:'Plate camera error: '+(pc&&pc.error||''),
                    skipped:'Plate camera: skipped (culprit is not a vehicle)'};

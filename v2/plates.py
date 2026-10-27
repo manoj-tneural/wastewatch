@@ -430,7 +430,10 @@ def vote(reads):
         # every value this position could be (all fit the slot: letter or digit), most likely first
         alts.append([[a, round(aw / total, 2)] for a, aw in c.most_common(3)])
         looks.append(_lookalikes(ch, kinds[i], i in series, exclude={a for a, _ in c.most_common(3)}))
-    norm = _fix_state("".join(chars))
+    # No correction after the vote: each shown character is the value with the highest
+    # share, so it matches the percentages shown next to it. (Every read was already
+    # state-code corrected before voting.)
+    norm = "".join(chars)
     if not valid_plate(norm):
         return None
     support = sum(1 for p, _ in items if p == norm)
