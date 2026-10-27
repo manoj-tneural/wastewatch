@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasteWatch · Shoulder</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a323d; --text:#e6edf3; --muted:#8b97a5;
+    --accent:#3fb68b; --danger:#ef5350; --radius:10px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  body{display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);background:#0b0e12;z-index:5}
+  .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#1f6f54);display:grid;place-items:center;font-weight:800;color:#fff}
+  header h1{font-size:16px;margin:0}
+  header .sub{color:var(--muted);font-size:12.5px}
+  header .spacer{flex:1}
+  a.btn,button,select{font:inherit;color:inherit}
+  a.btn,button.btn,select{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;text-decoration:none;color:var(--text)}
+  a.btn:hover,button.btn:hover{border-color:#3a4552}
+  select{max-width:360px}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel2)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .badge.running .dot{background:#f0b429;animation:pulse 1s infinite}
+  .badge.done .dot{background:var(--accent)}
+  @keyframes pulse{50%{opacity:.3}}
+  #stage{flex:1;display:grid;grid-template-columns:1fr 340px;min-height:0}
+  @media (max-width:900px){
+    #stage{grid-template-columns:1fr}
+    aside{display:none}
+    aside.show{display:block;position:absolute;right:12px;top:64px;bottom:12px;width:min(340px,92vw);z-index:6}
+  }
+  #view{position:relative;min-width:0;min-height:0}
+  #view canvas{display:block;width:100%;height:100%}
+  #labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+  .tag{
+    position:absolute;left:0;top:0;pointer-events:auto;cursor:pointer;
+    background:#f4f1e8;color:#1a1a1a;border:2px solid #d7d1c3;border-radius:4px;
+    padding:3px 8px 4px;text-align:center;transform:translate(-50%,-120%);
+    box-shadow:0 8px 18px rgba(0,0,0,.35);
+  }
+  .tag b{display:block;font-family:var(--mono);font-size:13px;letter-spacing:.08em;font-weight:750}
+  .tag span{display:block;font-size:10px;letter-spacing:.02em;color:#5c564c;margin-top:1px}
+  .tag.on{border-color:#ef5350;box-shadow:0 0 0 3px rgba(239,83,80,.35)}
+  aside{border-left:1px solid var(--line);background:var(--panel);padding:16px;overflow:auto}
+  aside h2{margin:0 0 6px;font-size:15px}
+  .meta{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:12.5px;color:var(--muted);margin:10px 0}
+  .meta b{color:var(--text);font-weight:500;font-family:var(--mono)}
+  .shot{background:#000;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:8px}
+  .shot img{width:100%;display:block;max-height:220px;object-fit:contain;background:#000}
+  .shot .cap{font-size:11px;color:var(--muted);padding:4px 8px;background:var(--panel2)}
+  .empty{color:var(--muted);font-size:13px;padding:8px 0 16px}
+  .hint{position:absolute;left:14px;bottom:12px;font-size:12px;color:var(--muted);background:rgba(14,17,22,.72);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+  button.link{background:none;border:0;color:#8ec1ff;padding:0;cursor:pointer;font:inherit}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">W</div>
+  <div>
+    <h1>Shoulder</h1>
+    <div class="sub">Each throw on the verge, with its plate</div>
+  </div>
+  <div class="spacer"></div>
+  <span id="badge" class="badge"><span class="dot"></span><span id="badgeTxt">No analysis</span></span>
+  <select id="history"><option value="">Choose an analysis…</option></select>
+  <a class="btn" href="/">Evidence</a>
+</header>
+<div id="stage">
+  <div id="view">
+    <div id="labels"></div>
+    <div class="hint">Drag to look around · scroll to zoom · click a plate</div>
+  </div>
+  <aside id="panel">
+    <h2 id="pTitle">Waiting for a throw</h2>
+    <div class="empty" id="pEmpty">The left shoulder is the watched ground. When the detector records a bag, cover or bottle, it appears here with whoever was beside it.</div>
+    <div id="pBody" style="display:none">
+      <div class="meta" id="pMeta"></div>
+      <div id="pShots"></div>
+    </div>
+  </aside>
+</div>
+<script type="module">
+import * as THREE from "/static/three.module.js";
+
+const view = document.getElementById("view");
+const labels = document.getElementById("labels");
+const historySel = document.getElementById("history");
+const badge = document.getElementById("badge");
+const badgeTxt = document.getElementById("badgeTxt");
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x0e1116);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+view.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xd5dde6, 0x3a3428, 1.05));
+const sun = new THREE.DirectionalLight(0xfff6ea, 1.35);
+sun.position.set(12, 22, 8);
+scene.add(sun);
+
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+let viewSize = 9.2;
+let azimuth = Math.PI / 4;
+let polar = 0.92;
+const actors = new Map();
+let selected = null;
+let jobId = null;
+let generation = 0;
+let videoW = 848, videoH = 480;
+let zone = null;
+let pollT = null;
+
+function paintGround() {
+  const c = document.createElement("canvas");
+  c.width = 64; c.height = 256;
+  const g = c.getContext("2d");
+  g.fillStyle = "#5c4d3b";
+  g.fillRect(0, 0, 28, 256);
+  g.fillStyle = "#3c6634";
+  g.fillRect(28, 0, 36, 256);
+  for (let i = 0; i < 80; i++) {
+    g.fillStyle = i % 2 ? "rgba(0,0,0,.15)" : "rgba(255,255,255,.08)";
+    g.fillRect(Math.random() * 64, Math.random() * 256, 2, 3);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(1, 4);
+  return t;
+}
+function paintRoad() {
+  const c = document.createElement("canvas");
+  c.width = 128; c.height = 256;
+  const g = c.getContext("2d");
+  g.fillStyle = "#3a414c";
+  g.fillRect(0, 0, 128, 256);
+  g.strokeStyle = "rgba(255,255,255,.45)";
+  g.lineWidth = 3;
+  g.setLineDash([18, 16]);
+  g.beginPath();
+  g.moveTo(64, 0); g.lineTo(64, 256); g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(1, 3);
+  return t;
+}
+
+const verge = new THREE.Mesh(
+  new THREE.PlaneGeometry(10, 36),
+  new THREE.MeshStandardMaterial({ map: paintGround(), roughness: 1 })
+);
+verge.rotation.x = -Math.PI / 2;
+verge.position.set(-4.2, 0, 0);
+scene.add(verge);
+const road = new THREE.Mesh(
+  new THREE.PlaneGeometry(16, 36),
+  new THREE.MeshStandardMaterial({ map: paintRoad(), roughness: 0.92 })
+);
+road.rotation.x = -Math.PI / 2;
+road.position.set(8.2, 0.01, 0);
+scene.add(road);
+
+function mat(color) {
+  return new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.05 });
+}
+function vehicleMesh(cls) {
+  const g = new THREE.Group();
+  if (cls === "motorcycle" || cls === "bicycle") {
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.42, 0.55), mat(0x2b2f36)));
+    const rider = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.5, 4, 8), mat(0xc9d2dc));
+    rider.position.set(-0.05, 0.68, 0);
+    g.add(rider);
+  } else if (cls === "bus" || cls === "truck") {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.15, 1.35), mat(cls === "bus" ? 0xd8de68 : 0xc4b49a));
+    body.position.y = 0.65;
+    g.add(body);
+  } else if (cls === "person") {
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.7, 4, 8), mat(0xd5dbe3));
+    body.position.y = 0.7;
+    g.add(body);
+  } else {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.55, 1.05), mat(0x9eb6d4));
+    body.position.y = 0.36;
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.42, 0.92), mat(0xd5e4f5));
+    cab.position.set(-0.2, 0.8, 0);
+    g.add(body, cab);
+  }
+  g.traverse(o => { if (o.isMesh) o.castShadow = false; });
+  return g;
+}
+function wasteMesh(id) {
+  const g = new THREE.Group();
+  const colors = [0x1c1c1c, 0x2f6fed, 0xe2b340, 0xd7d7d7, 0xc4493a];
+  const sack = new THREE.Mesh(
+    new THREE.SphereGeometry(0.48, 16, 12),
+    mat(colors[(id - 1) % colors.length])
+  );
+  sack.scale.set(1, 0.72, 0.9);
+  sack.position.y = 0.32;
+  sack.userData.pick = id;
+  g.add(sack);
+  return g;
+}
+
+function actionLine(e) {
+  const c = e.vehicle_class;
+  let line = "Waste landed";
+  if (e.culprit_type === "pedestrian") line = "Dropped on foot";
+  else if (e.culprit_type === "rider") line = "Stepped off and dropped";
+  else if (c === "motorcycle" || c === "bicycle" || c === "car" || c === "bus" || c === "truck") line = "Thrown from " + c;
+  else if (e.culprit_type === "vehicle") line = "Thrown from vehicle";
+  if (e.hidden) line += ", then hidden";
+  return line;
+}
+function mapPoint(e) {
+  const b = e.waste_box;
+  let nx = 0.45, ny = 0.5;
+  if (b && b.length === 4 && videoW && videoH) {
+    const px = ((b[0] + b[2]) / 2) / videoW;
+    const py = ((b[1] + b[3]) / 2) / videoH;
+    let x0 = 0, x1 = 1, y0 = 0, y1 = 1;
+    if (zone && zone.length) {
+      x0 = Math.min(...zone.map(p => p[0]));
+      x1 = Math.max(...zone.map(p => p[0]));
+      y0 = Math.min(...zone.map(p => p[1]));
+      y1 = Math.max(...zone.map(p => p[1]));
+    }
+    nx = (px - x0) / Math.max(0.08, x1 - x0);
+    ny = (py - y0) / Math.max(0.08, y1 - y0);
+  }
+  nx = Math.min(1, Math.max(0, nx));
+  ny = Math.min(1, Math.max(0, ny));
+  return { x: -7.6 + nx * 6.2, z: -13 + ny * 26 };
+}
+
+function spawn(e) {
+  const at = mapPoint(e);
+  const root = new THREE.Group();
+  const waste = wasteMesh(e.id);
+  waste.position.set(at.x, 0, at.z);
+  waste.userData.pick = e.id;
+  const cls = e.culprit_type === "pedestrian" || e.culprit_type === "rider" ? "person" : (e.vehicle_class || "car");
+  const actor = vehicleMesh(e.culprit_type === "unknown" ? "car" : cls);
+  const ax = 2.4;
+  actor.position.set(ax, 0, at.z);
+  actor.rotation.y = Math.PI / 2;
+  actor.traverse(o => { if (o.isMesh) o.userData.pick = e.id; });
+  const lineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(at.x, 0.08, at.z),
+    new THREE.Vector3(ax, 0.08, at.z),
+  ]);
+  const line = new THREE.Line(lineGeo, new THREE.LineDashedMaterial({ color: 0xf0b429, dashSize: 0.28, gapSize: 0.16 }));
+  line.computeLineDistances();
+  root.add(waste, actor, line);
+  scene.add(root);
+
+  const el = document.createElement("div");
+  el.className = "tag";
+  el.setAttribute("role", "button");
+  el.innerHTML = "<b></b><span></span>";
+  el.onclick = () => select(e.id);
+  labels.appendChild(el);
+  const node = { root, el, waste, actor, anchor: new THREE.Vector3(ax, 1.55, at.z), event: e, born: performance.now() };
+  actors.set(e.id, node);
+  refresh(node, e);
+  return node;
+}
+function refresh(node, e) {
+  node.event = e;
+  node.el.querySelector("b").textContent = e.plate_text || "Plate unread";
+  node.el.querySelector("span").textContent = (e.time_str ? e.time_str + " · " : "") + actionLine(e);
+  if (selected === e.id) fillPanel(e);
+}
+function clearActors() {
+  for (const node of actors.values()) {
+    scene.remove(node.root);
+    node.el.remove();
+  }
+  actors.clear();
+  selected = null;
+  showEmpty();
+}
+
+function showEmpty() {
+  document.getElementById("pTitle").textContent = "Waiting for a throw";
+  document.getElementById("pEmpty").style.display = "block";
+  document.getElementById("pBody").style.display = "none";
+  document.querySelectorAll(".tag").forEach(t => t.classList.remove("on"));
+}
+function fillPanel(e) {
+  document.getElementById("pTitle").textContent = "Event " + e.id;
+  document.getElementById("pEmpty").style.display = "none";
+  document.getElementById("pBody").style.display = "block";
+  const who = e.culprit_type === "vehicle"
+    ? (e.vehicle_class || "vehicle") + " #" + e.track_id
+    : e.culprit_type === "unknown" ? "Not identified" : e.culprit_type + " #" + e.track_id;
+  document.getElementById("pMeta").innerHTML = `
+    <span>When</span><b>${e.time_str || "–"}</b>
+    <span>Action</span><b>${actionLine(e)}</b>
+    <span>Who</span><b>${who}</b>
+    <span>Plate</span><b>${e.plate_text || "not read"}</b>`;
+  const base = `/files/${jobId}/${e.dir}/`;
+  const f = e.files || {};
+  const shots = [
+    [f.gif, "Action"],
+    [f.plate, "Plate"],
+    [f.vehicle, "Vehicle"],
+    [f.waste, "Waste"],
+  ].filter(s => s[0]);
+  document.getElementById("pShots").innerHTML = shots.map(([file, cap]) =>
+    `<div class="shot"><img src="${base}${file}" alt=""><div class="cap">${cap}</div></div>`).join("");
+  document.querySelectorAll(".tag").forEach(t => t.classList.remove("on"));
+  const node = actors.get(e.id);
+  if (node) node.el.classList.add("on");
+  document.getElementById("panel").classList.add("show");
+}
+function select(id) {
+  const node = actors.get(id);
+  if (!node) return;
+  selected = id;
+  fillPanel(node.event);
+}
+
+function placeCamera() {
+  const r = 34;
+  camera.position.set(
+    Math.sin(polar) * Math.sin(azimuth) * r,
+    Math.cos(polar) * r,
+    Math.sin(polar) * Math.cos(azimuth) * r
+  );
+  camera.lookAt(-0.2, 0.2, 0);
+}
+function fit() {
+  const w = view.clientWidth, h = Math.max(view.clientHeight, 1);
+  const aspect = w / h;
+  camera.left = -viewSize * aspect;
+  camera.right = viewSize * aspect;
+  camera.top = viewSize;
+  camera.bottom = -viewSize;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h, false);
+}
+placeCamera();
+fit();
+window.addEventListener("resize", fit);
+
+let dragging = false, moved = 0, lx = 0, ly = 0;
+renderer.domElement.addEventListener("pointerdown", e => { dragging = true; moved = 0; lx = e.clientX; ly = e.clientY; });
+window.addEventListener("pointerup", () => { dragging = false; });
+window.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  const dx = e.clientX - lx, dy = e.clientY - ly;
+  moved += Math.abs(dx) + Math.abs(dy);
+  lx = e.clientX; ly = e.clientY;
+  azimuth = Math.min(Math.PI / 4 + 0.7, Math.max(Math.PI / 4 - 0.7, azimuth - dx * 0.005));
+  polar = Math.min(1.15, Math.max(0.65, polar + dy * 0.004));
+  placeCamera();
+});
+renderer.domElement.addEventListener("wheel", e => {
+  e.preventDefault();
+  viewSize = Math.min(28, Math.max(8, viewSize * (e.deltaY > 0 ? 1.08 : 0.92)));
+  fit();
+}, { passive: false });
+renderer.domElement.addEventListener("click", e => {
+  if (moved > 4) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((e.clientX - rect.left) / rect.width) * 2 - 1,
+    -((e.clientY - rect.top) / rect.height) * 2 + 1
+  );
+  const ray = new THREE.Raycaster();
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(scene.children, true);
+  const hit = hits.find(h => h.object.userData && h.object.userData.pick);
+  if (hit) select(hit.object.userData.pick);
+});
+
+const clock = new THREE.Clock();
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now();
+  const placed = [];
+  for (const node of actors.values()) {
+    const t = Math.min(1, (now - node.born) / 700);
+    const ease = 1 - Math.pow(1 - t, 3);
+    node.waste.position.y = 1.3 * (1 - ease);
+    const v = node.anchor.clone().project(camera);
+    if (v.z < 1) {
+      const x = (v.x * 0.5 + 0.5) * view.clientWidth;
+      let y = (-v.y * 0.5 + 0.5) * view.clientHeight;
+      for (const p of placed) {
+        if (Math.abs(p.x - x) < 150 && Math.abs(p.y - y) < 52) y = p.y - 54;
+      }
+      placed.push({ x, y });
+      node.el.style.display = "block";
+      node.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -120%)`;
+    } else node.el.style.display = "none";
+  }
+  renderer.render(scene, camera);
+  clock.getDelta();
+}
+frame();
+
+function applyJob(j) {
+  const st = j.status || "done";
+  badge.className = "badge " + (st === "running" || st === "queued" ? "running" : "done");
+  const n = (j.events || []).length;
+  badgeTxt.textContent = (st === "running" ? "Watching" : "Recorded") + " · " + n + (n === 1 ? " throw" : " throws");
+  const ids = new Set();
+  for (const e of j.events || []) {
+    ids.add(e.id);
+    if (!actors.has(e.id)) {
+      spawn(e);
+      if (selected == null) select(e.id);
+    } else refresh(actors.get(e.id), e);
+  }
+}
+function guessFrame(events) {
+  let w = 1, h = 1;
+  for (const e of events || []) {
+    const b = e.waste_box;
+    if (b && b.length === 4) {
+      w = Math.max(w, b[2]);
+      h = Math.max(h, b[3]);
+    }
+  }
+  return { w: w * 1.06, h: h * 1.06 };
+}
+async function openJob(id) {
+  const gen = ++generation;
+  jobId = id;
+  historySel.value = id;
+  clearActors();
+  const j = await (await fetch("/api/job/" + id)).json();
+  if (gen !== generation) return;
+  zone = j.zone || (j.settings && j.settings.zone) || null;
+  videoW = 848; videoH = 480;
+  let sized = false;
+  if (j.video_id) {
+    try {
+      const res = await fetch("/api/video/" + j.video_id);
+      if (res.ok) {
+        const v = await res.json();
+        if (v.width) { videoW = v.width; videoH = v.height; sized = true; }
+      }
+    } catch (e) { /* fall through to the box estimate */ }
+  }
+  if (!sized) {
+    const g = guessFrame(j.events);
+    if (g.w > 8) { videoW = g.w; videoH = g.h; }
+  }
+  applyJob(j);
+}
+async function poll() {
+  const gen = generation;
+  const id = jobId;
+  if (!id) return;
+  const res = await fetch("/api/job/" + id);
+  if (!res.ok || gen !== generation) return;
+  applyJob(await res.json());
+}
+async function loadHistory() {
+  const list = await (await fetch("/api/jobs")).json();
+  historySel.innerHTML = '<option value="">Choose an analysis…</option>' + list.map(j =>
+    `<option value="${j.id}">${j.video_name || j.id} · ${j.event_count} event(s) · ${j.status}</option>`).join("");
+  if (jobId) historySel.value = jobId;
+  return list;
+}
+historySel.onchange = () => { if (historySel.value) openJob(historySel.value); };
+
+const jobs = await loadHistory();
+const live = jobs.find(j => j.status === "running" || j.status === "queued");
+const first = live || jobs[0];
+if (first) openJob(first.id);
+else badgeTxt.textContent = "No analysis yet";
+pollT = setInterval(poll, 1000);
+</script>
+</body>
+</html>

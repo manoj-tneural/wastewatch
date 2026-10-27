@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasteWatch · Littering Detection</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a323d; --text:#e6edf3; --muted:#8b97a5;
+    --accent:#3fb68b; --accent2:#2f8f6d; --warn:#f0b429; --danger:#ef5350; --info:#58a6ff;
+    --radius:10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);background:#0b0e12;position:sticky;top:0;z-index:5}
+  .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#1f6f54);display:grid;place-items:center;font-weight:800;color:#fff}
+  header h1{font-size:16px;margin:0;letter-spacing:.2px}
+  header .sub{color:var(--muted);font-size:12.5px}
+  header .spacer{flex:1}
+  select,input,button{font:inherit;color:inherit}
+  .hist{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;max-width:340px}
+  main{display:grid;grid-template-columns:420px 1fr;gap:18px;padding:18px 22px;align-items:start}
+  @media (max-width:1100px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px}
+  .card h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);display:flex;align-items:center;gap:8px}
+  .step{width:20px;height:20px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);display:grid;place-items:center;font-size:11px;color:var(--text)}
+  .drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:22px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
+  .drop:hover,.drop.over{border-color:var(--accent);color:var(--text);background:rgba(63,182,139,.06)}
+  .drop b{color:var(--text)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .btn{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer}
+  .btn:hover{border-color:#3a4552}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#06140e;font-weight:650}
+  .btn.primary:hover{background:#4cc89b}
+  .btn.danger{border-color:#5c2b2b;color:#ff8a80}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.sm{padding:4px 9px;font-size:12.5px}
+  .vidinfo{font-size:12.5px;color:var(--muted);margin-top:10px}
+  .vidinfo b{color:var(--text)}
+  .zonewrap{position:relative;border-radius:8px;overflow:hidden;background:#000;border:1px solid var(--line)}
+  .zonewrap img{display:block;width:100%}
+  .zonewrap canvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair}
+  .hint{font-size:12px;color:var(--muted);margin:8px 0}
+  .empty{color:var(--muted);text-align:center;padding:30px 10px;font-size:13px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+  label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+  label.f input,label.f select{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 8px;color:var(--text)}
+  details summary{cursor:pointer;color:var(--muted);font-size:12.5px;margin:4px 0 10px}
+  .live{position:relative;background:#000;border-radius:8px;overflow:hidden;border:1px solid var(--line);aspect-ratio:16/9;display:grid;place-items:center}
+  .live img{width:100%;height:100%;object-fit:contain;display:block}
+  .live .ph{color:var(--muted)}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel2)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .badge.running .dot{background:var(--warn);animation:pulse 1s infinite}
+  .badge.done .dot{background:var(--accent)} .badge.error .dot{background:var(--danger)} .badge.stopped .dot{background:var(--info)}
+  @keyframes pulse{50%{opacity:.3}}
+  .bar{height:6px;background:var(--panel2);border-radius:99px;overflow:hidden;margin:12px 0 6px}
+  .bar>div{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));width:0;transition:width .3s}
+  .stats{display:flex;gap:18px;font-size:12.5px;color:var(--muted);flex-wrap:wrap}
+  .stats b{color:var(--text);font-family:var(--mono)}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  @media (max-width:800px){.kpis{grid-template-columns:1fr 1fr}}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+  .kpi .v{font-size:24px;font-weight:700;font-family:var(--mono)} .kpi .l{font-size:12px;color:var(--muted)}
+  .events{display:flex;flex-direction:column;gap:14px}
+  .ev{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--danger);border-radius:var(--radius);padding:14px;display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:14px}
+  @media (max-width:800px){.ev{grid-template-columns:1fr}}
+  .ev .gif{background:#000;border-radius:8px;overflow:hidden;aspect-ratio:16/9;display:grid;place-items:center;color:var(--muted);font-size:12.5px}
+  .ev .gif img{width:100%;height:100%;object-fit:contain;cursor:zoom-in}
+  .ev h3{margin:0 0 4px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .tag{font-size:11px;padding:2px 7px;border-radius:5px;background:rgba(239,83,80,.15);color:#ff8a80;border:1px solid rgba(239,83,80,.35);text-transform:uppercase;letter-spacing:.05em}
+  .tag.v{background:rgba(88,166,255,.12);color:#8ec1ff;border-color:rgba(88,166,255,.3)}
+  .plate{font-family:var(--mono);font-size:18px;letter-spacing:.14em;font-weight:750;background:#f4f1e8;color:#1a1a1a;display:inline-block;padding:3px 10px 4px;border-radius:4px;border:2px solid #d7d1c3;margin:6px 0 2px}
+  .plate-miss{font-size:12px;color:var(--muted);margin:6px 0 2px}
+  .meta{font-size:12.5px;color:var(--muted);display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:8px 0 10px}
+  .meta b{color:var(--text);font-weight:500;font-family:var(--mono)}
+  .thumbs{display:grid;grid-template-columns:1.3fr 1fr;gap:8px}
+  .thumb{background:#000;border-radius:7px;overflow:hidden;border:1px solid var(--line);position:relative;aspect-ratio:1/1;display:grid;place-items:center}
+  .thumb img{max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}
+  .thumb span{position:absolute;left:6px;top:6px;font-size:10.5px;background:rgba(0,0,0,.65);padding:2px 6px;border-radius:4px;color:#ddd}
+  .ev .actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  a.btn{text-decoration:none;display:inline-block;color:var(--text)}
+  .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;place-items:center;z-index:20;cursor:zoom-out}
+  .lightbox.show{display:grid}
+  .lightbox img{max-width:94vw;max-height:92vh;border-radius:8px}
+  .toast{position:fixed;bottom:18px;right:18px;background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:8px;display:none;z-index:30}
+  .modes{display:flex;gap:6px;margin:0 0 10px}
+  .modes .btn.on{border-color:var(--accent);color:var(--accent)}
+  .pcam{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+  .pcam-h{font-size:12.5px;font-weight:600;margin-bottom:8px}
+  .pcam-h span{font-weight:400;color:var(--muted);margin-left:6px}
+  .src{font-size:11.5px;color:var(--muted);margin:2px 0 8px}
+  .src b{color:var(--accent);font-weight:600}
+  .warn{font-size:11.5px;color:var(--warn);margin:2px 0 8px}
+  .legend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">W</div>
+  <div>
+    <h1>WasteWatch</h1>
+    <div class="sub">Roadside littering detection · vehicle attribution · evidence capture</div>
+  </div>
+  <div class="spacer"></div>
+  <a class="btn sm" href="/scene">Shoulder view</a>
+  <select id="history" class="hist" title="Previous analyses"><option value="">Previous analyses…</option></select>
+</header>
+
+<main>
+  <!-- LEFT: setup -->
+  <section>
+    <div class="card">
+      <h2><span class="step">1</span> Cameras</h2>
+      <div class="pcam-h">Overview <span>the verge, where waste is thrown</span></div>
+      <div class="modes" id="ovModes">
+        <button type="button" class="btn sm on" data-mode="file">Video upload</button>
+        <button type="button" class="btn sm" data-mode="live">Live RTSP</button>
+      </div>
+      <div id="ovFile">
+        <div id="drop" class="drop">
+          <div><b>Drop a video here</b> or click to browse</div>
+          <div style="font-size:12px;margin-top:4px">MP4 · AVI · MOV · MKV</div>
+          <input id="file" type="file" accept="video/*" hidden>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <select id="videos" class="hist" style="flex:1"><option value="">…or pick an uploaded video</option></select>
+        </div>
+      </div>
+      <div id="ovLive" style="display:none">
+        <label class="f">RTSP URL
+          <input id="ovUrl" placeholder="rtsp://user:pass@192.168.1.64:554/stream1" autocomplete="off">
+        </label>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="btn sm" id="ovConnect">Connect</button>
+          <select id="ovLiveSel" class="hist" style="flex:1"><option value="">Previously added live cameras</option></select>
+        </div>
+      </div>
+      <div id="upmsg" class="vidinfo"></div>
+
+      <div class="pcam">
+        <div class="pcam-h">Plate camera <span>optional · zoomed on the road · live or a clip</span></div>
+        <div class="modes" id="plModes">
+          <button type="button" class="btn sm on" data-mode="file">Video upload</button>
+          <button type="button" class="btn sm" data-mode="live">Live RTSP</button>
+        </div>
+        <div id="plFile">
+          <div class="row">
+            <select id="plateSel" class="hist" style="flex:1"><option value="">None (single camera)</option></select>
+            <button type="button" class="btn sm" id="plateUp">Upload clip</button>
+            <input id="plateFile" type="file" accept="video/*" hidden>
+          </div>
+        </div>
+        <div id="plLive" style="display:none">
+          <label class="f">RTSP URL
+            <input id="plUrl" placeholder="rtsp://user:pass@192.168.1.65:554/stream1" autocomplete="off">
+          </label>
+          <div class="row" style="margin-top:8px">
+            <button type="button" class="btn sm" id="plConnect">Connect</button>
+            <select id="plLiveSel" class="hist" style="flex:1"><option value="">Previously added live cameras</option></select>
+          </div>
+        </div>
+        <div id="platemsg" class="vidinfo"></div>
+        <div id="syncRow" class="row" style="display:none;margin-top:8px">
+          <span class="vidinfo" style="margin:0" id="syncTxt"></span>
+          <label class="f" style="flex-direction:row;align-items:center;gap:6px;margin-left:auto">Adjust
+            <input id="plateAdj" type="number" step="0.1" value="0" style="width:72px"> s</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">2</span> Watched zone</h2>
+      <div id="zoneEmpty" class="empty">Upload a video to draw the area where dumping happens (drain, roadside, vacant plot).</div>
+      <div id="zoneBox" style="display:none">
+        <div class="zonewrap"><img id="frame" alt=""><canvas id="cv"></canvas></div>
+        <div class="hint">Draw the shoulder, drain or pile only — not the traffic lanes. Waste thrown by a pedestrian, a rider, or from a car (whether or not they get out) is matched to whoever was beside that spot. Bags, covers and bottles all count.</div>
+        <div class="row">
+          <button class="btn sm" id="undo">Undo point</button>
+          <button class="btn sm" id="clear">Clear (whole frame)</button>
+          <button class="btn sm" id="shoulder" title="For a camera looking along the road, with the verge on the left">Left shoulder</button>
+          <span id="zoneLbl" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">3</span> Analyse</h2>
+      <details>
+        <summary>Detection settings</summary>
+        <div class="grid2">
+          <label class="f">Model
+            <select id="s_model">
+              <option value="yolo11n.pt">YOLO11 nano (fast)</option>
+              <option value="yolo11s.pt">YOLO11 small</option>
+              <option value="yolo11m.pt">YOLO11 medium (accurate)</option>
+            </select></label>
+          <label class="f">Detect every N frames
+            <select id="s_stride"><option>1</option><option>2</option><option>3</option></select></label>
+          <label class="f">Vehicle confidence <input id="s_conf" type="number" step="0.05" min="0.1" max="0.9" value="0.30"></label>
+          <label class="f">Change sensitivity (lower = more sensitive) <input id="s_sens" type="number" step="2" min="10" max="80" value="30"></label>
+          <label class="f">Waste must stay still (s) <input id="s_persist" type="number" step="0.1" min="0.3" max="5" value="0.8"></label>
+          <label class="f">Culprit look-back (s) <input id="s_look" type="number" step="0.5" min="1" max="10" value="4"></label>
+          <label class="f" title="Scraps of one throw that land in the same spot are merged for this long. After that, or if the cover colour is clearly different, it is a new event. 0 records every dump separately.">Same-spot merge (s) <input id="s_frag" type="number" step="0.5" min="0" max="8" value="1.5"></label>
+          <label class="f">GIF pre-roll (s) <input id="s_pre" type="number" step="0.5" min="0.5" max="10" value="4"></label>
+          <label class="f">GIF post-roll (s) <input id="s_post" type="number" step="0.5" min="0" max="5" value="1.5"></label>
+          <label class="f" title="The plate camera is zoomed on the road. The vehicle passes it, but the throw can be earlier or later. Search this many seconds before the throw and the same amount after.">Plate cam search each side of the throw (s) <input id="s_pafter" type="number" step="0.5" min="1" max="30" value="12"></label>
+          <label class="f" title="Live cameras only. Frames per second the overview is analysed at. Lower it if the log says frames are dropped (CPU: 6-8, GPU: 25).">Live processing fps <input id="s_livefps" type="number" step="1" min="2" max="30" value="10"></label>
+        </div>
+      </details>
+      <div class="row" style="margin-top:6px">
+        <button class="btn primary" id="start" disabled>▶ Start analysis</button>
+        <button class="btn danger" id="stop" style="display:none">■ Stop</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: live + evidence -->
+  <section>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="margin:0">Live analysis</h2>
+        <span id="badge" class="badge"><span class="dot"></span><span id="badgeTxt">Idle</span></span>
+      </div>
+      <div class="live"><img id="live" alt="" style="display:none"><div id="livePh" class="ph">No analysis running</div></div>
+      <div class="legend">
+        <span><i style="background:#28aaff"></i>Vehicle</span><span><i style="background:#78dc78"></i>Person</span>
+        <span><i style="background:#ffff00"></i>New object (checking)</span><span><i style="background:#ff0000"></i>Confirmed litter</span>
+        <span><i style="background:#ff78ff"></i>Zone</span>
+      </div>
+      <div class="bar"><div id="barFill"></div></div>
+      <div class="stats">
+        <span>Frames <b id="stFrames">0 / 0</b></span>
+        <span>Speed <b id="stFps">0</b> fps</span>
+        <span>Video <b id="stVideo">–</b></span>
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="v" id="kEvents">0</div><div class="l">Littering events</div></div>
+      <div class="kpi"><div class="v" id="kVeh">0</div><div class="l">Vehicles identified</div></div>
+      <div class="kpi"><div class="v" id="kPed">0</div><div class="l">Pedestrians / unattributed</div></div>
+      <div class="kpi"><div class="v" id="kPlate">0</div><div class="l">Plates read</div></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:12px">
+        <h2 style="margin:0">Evidence</h2>
+        <div class="row">
+          <a class="btn sm" id="dlCsv" href="#" style="display:none">⬇ CSV</a>
+          <a class="btn sm" id="dlZip" href="#" style="display:none">⬇ All evidence (ZIP)</a>
+        </div>
+      </div>
+      <div id="events" class="events"><div class="empty">Events will appear here as soon as waste throwing is detected.</div></div>
+    </div>
+  </section>
+</main>
+
+<div class="lightbox" id="lb"><img id="lbImg" alt=""></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let video = null, zone = [], jobId = null, pollT = null, liveT = null;
+let ovMode = 'file', plMode = 'file';
+
+function toast(msg, ms=3000){ const t=$('#toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',ms); }
+const store = { get(k){ try{return JSON.parse(localStorage.getItem(k))}catch(e){return null} }, set(k,v){ try{localStorage.setItem(k,JSON.stringify(v))}catch(e){} } };
+
+/* ---------------- upload ---------------- */
+const drop = $('#drop'), file = $('#file');
+drop.onclick = () => file.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); };
+file.onchange = () => file.files[0] && upload(file.files[0]);
+
+function upload(f, forPlate=false){
+  const fd = new FormData(); fd.append('video', f);
+  const xhr = new XMLHttpRequest();
+  const msg = forPlate ? $('#platemsg') : $('#upmsg');
+  xhr.open('POST','/api/upload');
+  xhr.upload.onprogress = e => { if(e.lengthComputable) msg.textContent = `Uploading… ${Math.round(e.loaded/e.total*100)}%`; };
+  xhr.onload = async () => {
+    const r = JSON.parse(xhr.responseText || '{}');
+    if (xhr.status !== 200) { msg.textContent = r.error || 'Upload failed'; return; }
+    if (forPlate) { plate = r; await loadVideos(); setPlate(r); } else { setVideo(r); loadVideos(); }
+  };
+  xhr.send(fd);
+}
+
+let plate = null, allVideos = [];
+function fillSelect(sel, items, blank){
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">${blank}</option>` + items.map(v => `<option value="${v.video_id}">${v.name}</option>`).join('');
+  if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+async function loadVideos(){
+  allVideos = await (await fetch('/api/videos')).json();
+  const files = allVideos.filter(v => !v.live), lives = allVideos.filter(v => v.live);
+  fillSelect($('#videos'), files, '…or pick an uploaded video');
+  fillSelect($('#plateSel'), files, 'None (single camera)');
+  fillSelect($('#ovLiveSel'), lives, 'Previously added live cameras');
+  fillSelect($('#plLiveSel'), lives, 'Previously added live cameras');
+  if (video && !video.live) $('#videos').value = video.video_id;
+  if (video && video.live) $('#ovLiveSel').value = video.video_id;
+  if (plate && !plate.live) $('#plateSel').value = plate.video_id;
+  if (plate && plate.live) $('#plLiveSel').value = plate.video_id;
+}
+$('#videos').onchange = async e => { if(!e.target.value) return; setVideo(await (await fetch('/api/video/'+e.target.value)).json()); };
+$('#ovLiveSel').onchange = async e => { if(!e.target.value) return; setVideo(await (await fetch('/api/video/'+e.target.value)).json()); };
+
+/* ---------------- plate camera ---------------- */
+$('#plateUp').onclick = () => $('#plateFile').click();
+$('#plateFile').onchange = () => $('#plateFile').files[0] && upload($('#plateFile').files[0], true);
+$('#plateSel').onchange = async e => {
+  if(!e.target.value){ setPlate(null); return; }
+  setPlate(await (await fetch('/api/video/'+e.target.value)).json());
+};
+$('#plLiveSel').onchange = async e => {
+  if(!e.target.value){ setPlate(null); return; }
+  setPlate(await (await fetch('/api/video/'+e.target.value)).json());
+};
+function setMode(which, mode){
+  if(which==='ov') ovMode = mode; else plMode = mode;
+  const box = which==='ov' ? ['#ovFile','#ovLive'] : ['#plFile','#plLive'];
+  $(box[0]).style.display = mode==='file' ? '' : 'none';
+  $(box[1]).style.display = mode==='live' ? '' : 'none';
+  const bar = $(which==='ov' ? '#ovModes' : '#plModes');
+  bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.mode===mode));
+  store.set(which+'Mode', mode);
+}
+$('#ovModes').onclick = e => { const b=e.target.closest('button'); if(b) setMode('ov', b.dataset.mode); };
+$('#plModes').onclick = e => { const b=e.target.closest('button'); if(b) setMode('pl', b.dataset.mode); };
+async function connectLive(which){
+  const urlEl = $(which==='ov' ? '#ovUrl' : '#plUrl');
+  const url = urlEl.value.trim();
+  const msg = $(which==='ov' ? '#upmsg' : '#platemsg');
+  if(!url){ toast('Paste the RTSP URL'); return; }
+  msg.textContent = 'Connecting…';
+  const res = await fetch('/api/stream',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url, name: which==='ov' ? 'Overview' : 'Plate'})});
+  const r = await res.json();
+  if(!res.ok){ msg.textContent = r.error || 'Could not connect'; toast(r.error||'Could not connect', 5000); return; }
+  store.set(which+'Url', url);
+  await loadVideos();
+  if(which==='ov') setVideo(r); else setPlate(r);
+}
+$('#ovConnect').onclick = () => connectLive('ov');
+$('#plConnect').onclick = () => connectLive('pl');
+$('#ovUrl').value = store.get('ovUrl') || '';
+$('#plUrl').value = store.get('plUrl') || '';
+setMode('ov', store.get('ovMode')==='live' ? 'live' : 'file');
+setMode('pl', store.get('plMode')==='live' ? 'live' : 'file');
+async function setPlate(p){
+  plate = p;
+  $('#plateSel').value = p ? p.video_id : '';
+  if(!p){ $('#platemsg').textContent=''; $('#syncRow').style.display='none'; return; }
+  $('#platemsg').innerHTML = `<b>${p.name}</b> · ${p.width}×${p.height}${p.live?' · live':` · ${p.fps} fps · ${p.duration}s`}`;
+  updateSync();
+}
+async function updateSync(){
+  if(!plate || !video){ $('#syncRow').style.display='none'; return; }
+  if(plate.video_id === video.video_id){ $('#syncTxt').textContent='Pick a different video for the plate camera'; $('#syncRow').style.display='flex'; return; }
+  const r = await (await fetch(`/api/sync?video_id=${video.video_id}&plate_id=${plate.video_id}`)).json();
+  $('#syncTxt').innerHTML = r.live ? 'Live cameras are synced by arrival time'
+    : 'Clips are synced from the traffic in both cameras when analysis starts'
+      + (r.auto ? ` <span style="opacity:.7">(file names say ${r.offset>=0?'+':''}${r.offset}s)</span>` : '');
+  $('#syncRow').style.display='flex';
+}
+
+function setVideo(v){
+  video = v;
+  $('#upmsg').innerHTML = `<b>${v.name}</b> · ${v.width}×${v.height}${v.live?' · live':` · ${v.fps} fps · ${v.duration}s`}`;
+  updateSync();
+  $('#zoneEmpty').style.display='none'; $('#zoneBox').style.display='block';
+  const img = $('#frame'); img.onload = () => { sizeCanvas(); draw(); };
+  img.src = `/api/video/${v.video_id}/frame.jpg`;
+  zone = store.get('zone:'+v.name) || [];   // remember zone per camera/file name
+  $('#start').disabled = false;
+}
+
+/* ---------------- zone editor ---------------- */
+const cv = $('#cv'), ctx = cv.getContext('2d');
+function sizeCanvas(){ const r = cv.getBoundingClientRect(); cv.width = r.width*devicePixelRatio; cv.height = r.height*devicePixelRatio; }
+window.addEventListener('resize', ()=>{ if(video){ sizeCanvas(); draw(); } });
+cv.onclick = e => {
+  const r = cv.getBoundingClientRect();
+  zone.push([+((e.clientX-r.left)/r.width).toFixed(4), +((e.clientY-r.top)/r.height).toFixed(4)]);
+  saveZone(); draw();
+};
+$('#undo').onclick = () => { zone.pop(); saveZone(); draw(); };
+$('#clear').onclick = () => { zone = []; saveZone(); draw(); };
+$('#shoulder').onclick = () => {
+  zone = [[0, 0.08], [0.40, 0.06], [0.52, 1], [0, 1]];
+  saveZone(); draw();
+};
+function saveZone(){ if(video) store.set('zone:'+video.name, zone); }
+function draw(){
+  const W=cv.width, H=cv.height; ctx.clearRect(0,0,W,H);
+  $('#zoneLbl').textContent = zone.length>=3 ? `${zone.length}-point zone` : (zone.length ? 'Add at least 3 points' : 'Watching whole frame');
+  if(!zone.length) return;
+  ctx.lineWidth = 2*devicePixelRatio; ctx.strokeStyle='#ff78ff'; ctx.fillStyle='rgba(255,120,255,.18)';
+  ctx.beginPath(); zone.forEach(([x,y],i)=> i?ctx.lineTo(x*W,y*H):ctx.moveTo(x*W,y*H));
+  if(zone.length>=3){ ctx.closePath(); ctx.fill(); } ctx.stroke();
+  zone.forEach(([x,y])=>{ ctx.beginPath(); ctx.arc(x*W,y*H,4*devicePixelRatio,0,7); ctx.fillStyle='#fff'; ctx.fill(); });
+}
+
+/* ---------------- analysis ---------------- */
+const S = id => $(id).value;
+$('#start').onclick = async () => {
+  if(!video){ toast(ovMode==='live' ? 'Connect the overview camera' : 'Choose an overview video'); return; }
+  if(ovMode==='live' && !video.live){ toast('Connect the overview RTSP camera'); return; }
+  if(ovMode==='file' && video.live){ toast('Pick an uploaded video for the overview'); return; }
+  if(plMode==='live' && !(plate && plate.live)){ toast('Connect the plate RTSP camera, or switch it to video upload'); return; }
+  if(plMode==='file' && plate && plate.live) plate = null;
+  const body = { video_id: video.video_id, zone: zone.length>=3 ? zone : null,
+    plate_video_id: plate ? plate.video_id : null, plate_adjust: parseFloat(S('#plateAdj'))||0,
+    settings: { model:S('#s_model'), stride:S('#s_stride'), conf:S('#s_conf'), sensitivity:S('#s_sens'),
+                persist:S('#s_persist'), lookback:S('#s_look'), fragment:S('#s_frag'), pre_roll:S('#s_pre'), post_roll:S('#s_post'),
+                plate_after:S('#s_pafter'), live_fps:S('#s_livefps') } };
+  const res = await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r = await res.json();
+  if(!res.ok){ toast(r.error||'Could not start'); return; }
+  openJob(r.job_id, true);
+};
+$('#stop').onclick = async () => { if(jobId) await fetch(`/api/job/${jobId}/stop`,{method:'POST'}); };
+
+function openJob(id, live){
+  jobId = id; renderedVersions = {}; $('#events').innerHTML='';
+  clearInterval(pollT); clearInterval(liveT);
+  poll(); pollT = setInterval(poll, 800);
+  if(live){ liveT = setInterval(()=>{ const im=$('#live'); const n=new Image(); n.onload=()=>{im.src=n.src; im.style.display='block'; $('#livePh').style.display='none';}; n.src=`/api/job/${jobId}/preview.jpg?t=${Date.now()}`; }, 350); }
+  $('#dlCsv').href = `/api/job/${id}/events.csv`; $('#dlZip').href = `/api/job/${id}/report.zip`;
+  $('#dlCsv').style.display = $('#dlZip').style.display = 'inline-block';
+}
+
+let renderedVersions = {};
+async function poll(){
+  const res = await fetch('/api/job/'+jobId); if(!res.ok) return;
+  const j = await res.json();
+  const st = j.status;
+  $('#badge').className = 'badge '+st; $('#badgeTxt').textContent = {queued:'Queued',syncing:'Syncing cameras',running:'Analysing',done:'Completed',error:'Error',stopped:'Stopped'}[st]||st;
+  const pct = j.total ? Math.min(100, j.progress/j.total*100) : (st==='done'?100:0);
+  $('#barFill').style.width = pct+'%';
+  $('#stFrames').textContent = `${j.progress||0} / ${j.total||0}`; $('#stFps').textContent = j.fps||0; $('#stVideo').textContent = (j.video_name||'–') + (j.plate_video_name ? `  +  plate cam (${j.live?'live':j.plate_sync?`${j.plate_offset>=0?'+':''}${j.plate_offset}s, ${j.plate_sync.method}`:'syncing…'})` : '');
+  const running = st==='running'||st==='queued'||st==='syncing';
+  $('#start').disabled = running || !video; $('#stop').style.display = running ? 'inline-block':'none';
+  renderEvents(j.events||[]);
+  if(!running){
+    clearInterval(pollT); clearInterval(liveT);
+    if(st==='error') toast('Error: '+j.error, 6000);
+    if(st==='done' && liveT) { $('#livePh').textContent='Analysis complete'; }
+    loadHistory();
+  }
+}
+
+function renderEvents(evs){
+  const box = $('#events');
+  if(!evs.length){ box.innerHTML = '<div class="empty">No littering detected yet.</div>'; renderedVersions={}; }
+  else if(box.querySelector('.empty')) box.innerHTML='';
+  $('#kEvents').textContent = evs.length;
+  $('#kVeh').textContent = new Set(evs.filter(e=>e.culprit_type==='vehicle').map(e=>e.track_id)).size;
+  $('#kPed').textContent = evs.filter(e=>e.culprit_type!=='vehicle').length;
+  const plateCounts = {};
+  evs.forEach(e=>{ if(e.plate_norm) plateCounts[e.plate_norm]=(plateCounts[e.plate_norm]||0)+1; });
+  $('#kPlate').textContent = Object.keys(plateCounts).length;
+  evs.forEach(e=>{
+    const pc = e.platecam || null;
+    const ver = `${e.gif_ready}-${e.snapshot_version||0}-${e.plate_text||''}-${e.plate_status||''}-${e.plate_from||''}-${e.hidden?1:0}-${pc?pc.status:''}`;
+    if(renderedVersions[e.id]===ver) return;
+    renderedVersions[e.id]=ver;
+    const base = `/files/${jobId}/${e.dir}/`, f = e.files||{}, v = e.snapshot_version||0;
+    const who = e.culprit_type==='vehicle' ? `${e.vehicle_class} #${e.track_id}` :
+                e.culprit_type==='unknown' ? 'Not identified' : `${e.culprit_type} #${e.track_id}`;
+    const repeats = e.plate_norm && plateCounts[e.plate_norm] > 1 ? plateCounts[e.plate_norm] : 0;
+    const plateHtml = e.plate_text
+      ? `<div class="plate" title="Confidence ${Math.round((e.plate_conf||0)*100)}%">${e.plate_text}</div>${repeats?`<div class="plate-miss">Same plate on ${repeats} events</div>`:''}`
+      : `<div class="plate-miss">${e.plate_status==='unavailable'?'Plate reader unavailable':e.plate_status==='pending'?'Reading plate…':(f.plate?'Plate captured — number not read confidently':'Plate not readable')}</div>`;
+    const pcMsg = {searching:'Plate camera: searching…', no_frames:'Plate camera: no footage for this time — check sync',
+                   no_vehicle:'Plate camera: no vehicle found in that window', error:'Plate camera error: '+(pc&&pc.error||''),
+                   skipped:'Plate camera: skipped (culprit is not a vehicle)'};
+    let srcHtml = '';
+    if(e.plate_text && e.plate_from==='plate_cam')
+      srcHtml = `<div class="src">from <b>plate camera</b>${e.plate_votes?` · ${e.plate_votes} frames agree`:''}${e.plate_overview?` · overview read ${e.plate_overview}`:''}</div>`;
+    else if(e.plate_text)
+      srcHtml = `<div class="src">from overview camera</div>`;
+    if(pc && pcMsg[pc.status]) srcHtml += `<div class="src">${pcMsg[pc.status]}</div>`;
+    else if(pc && pc.status==='matched' && !e.plate_text) srcHtml += `<div class="src">Plate camera found the ${pc.vehicle_class||'vehicle'} (${pc.seen_from} → ${pc.seen_to}) but could not read the number</div>`;
+    if(pc && pc.ambiguous) srcHtml += `<div class="warn">⚠ Two similar vehicles in the plate camera at that time — check the plate camera photo</div>`;
+    if(pc && pc.status==='matched' && pc.type_ok===false) srcHtml += `<div class="warn">⚠ Plate camera match is a different vehicle type — verify</div>`;
+    const html = `
+      <div>
+        <div class="gif">${f.gif ? `<img src="${base}${f.gif}" data-full="${base}${f.gif}">` : 'Building action GIF…'}</div>
+      </div>
+      <div>
+        <h3>Event ${e.id} <span class="tag">Littering</span> ${e.vehicle_class?`<span class="tag v">${e.vehicle_class}</span>`:''}</h3>
+        <div class="meta">
+          <span>Waste at rest</span><b>${e.time_str}</b>
+          ${e.hidden?'<span>How</span><b>Seen, then hidden</b>':''}
+          <span>Culprit</span><b>${who}</b>
+          ${e.culprit_time_str?`<span>Culprit at spot</span><b>${e.culprit_time_str}</b>`:''}
+          ${e.gif_range?`<span>Clip</span><b>${e.gif_range[0]} → ${e.gif_range[1]}</b>`:''}
+        </div>
+        ${plateHtml}
+        ${srcHtml}
+        <div class="thumbs">
+          <div class="thumb"><span>Vehicle / person</span>${f.vehicle?`<img src="${base}${f.vehicle}?v=${v}">`:'<small style="color:var(--muted)">n/a</small>'}</div>
+          <div class="thumb"><span>Waste</span>${f.waste?`<img src="${base}${f.waste}">`:''}</div>
+          ${f.plate?`<div class="thumb"><span>Plate</span><img src="${base}${f.plate}?v=${v}-${e.plate_from||''}"></div>`:''}
+          ${f.pc_vehicle?`<div class="thumb"><span>Plate camera</span><img src="${base}${f.pc_vehicle}" data-full="${base}${f.pc_scene||f.pc_vehicle}"></div>`:''}
+        </div>
+        <div class="actions">
+          ${f.vehicle?`<a class="btn sm" href="${base}${f.vehicle}" download="event${e.id}_vehicle.jpg">⬇ Snapshot</a>`:''}
+          ${f.plate?`<a class="btn sm" href="${base}${f.plate}" download="event${e.id}_plate.jpg">⬇ Plate</a>`:''}
+          ${f.gif?`<a class="btn sm" href="${base}${f.gif}" download="event${e.id}_action.gif">⬇ GIF</a>`:''}
+          ${f.scene?`<button class="btn sm" data-open="${base}${f.scene}">Scene</button>`:''}
+          ${f.pc_scene?`<button class="btn sm" data-open="${base}${f.pc_scene}">Plate camera frame</button>`:''}
+        </div>
+      </div>`;
+    let el = document.getElementById('ev'+e.id);
+    if(!el){ el = document.createElement('div'); el.className='ev'; el.id='ev'+e.id; box.prepend(el); }
+    el.innerHTML = html;
+  });
+}
+
+/* lightbox */
+document.addEventListener('click', e=>{
+  const t = e.target;
+  if(t.matches('.ev img')) openLb(t.dataset.full || t.src);
+  else if(t.dataset && t.dataset.open) openLb(t.dataset.open);
+});
+function openLb(src){ $('#lbImg').src=src; $('#lb').classList.add('show'); }
+$('#lb').onclick = ()=> $('#lb').classList.remove('show');
+
+/* history */
+async function loadHistory(){
+  const list = await (await fetch('/api/jobs')).json();
+  $('#history').innerHTML = '<option value="">Previous analyses…</option>' +
+    list.map(j=>`<option value="${j.id}">${j.id.slice(0,15).replace(/(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)/,'$1-$2-$3 $4:$5')} · ${j.video_name} · ${j.event_count} event(s) · ${j.status}</option>`).join('');
+}
+$('#history').onchange = e => { if(e.target.value){ $('#live').style.display='none'; $('#livePh').style.display='block'; $('#livePh').textContent='Viewing saved analysis'; openJob(e.target.value,false);} };
+
+loadVideos(); loadHistory();
+</script>
+</body>
+</html>
