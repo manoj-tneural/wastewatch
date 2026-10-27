@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasteWatch · Event log</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a323d; --text:#e6edf3; --muted:#8b97a5;
+    --accent:#3fb68b; --accent2:#2f8f6d; --warn:#f0b429; --danger:#ef5350; --info:#58a6ff;
+    --radius:10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);background:#0b0e12;position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#1f6f54);display:grid;place-items:center;font-weight:800;color:#fff}
+  header h1{font-size:16px;margin:0}
+  header .sub{color:var(--muted);font-size:12.5px}
+  .spacer{flex:1}
+  a{color:inherit}
+  select,input,button{font:inherit;color:inherit}
+  main{padding:18px 22px;max-width:1500px;margin:0 auto}
+  .btn{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;color:var(--text);white-space:nowrap}
+  .btn:hover{border-color:#3a4552}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#06140e;font-weight:650}
+  .btn.sm{padding:4px 9px;font-size:12.5px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:16px}
+  .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+  label.f input,label.f select{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 8px;color:var(--text);min-width:0}
+  label.f.grow{flex:1;min-width:200px}
+  .check{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);cursor:pointer}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  @media (max-width:800px){.kpis{grid-template-columns:1fr 1fr}}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+  .kpi .v{font-size:24px;font-weight:700;font-family:var(--mono)} .kpi .l{font-size:12px;color:var(--muted)}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .bar .info{color:var(--muted);font-size:12.5px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;background:var(--panel)}
+  tbody tr:hover{background:#18202a}
+  tbody tr.sel{background:rgba(63,182,139,.07)}
+  td.when b{font-family:var(--mono);font-weight:500}
+  td.when div{font-size:12px;color:var(--muted)}
+  .plate{font-family:var(--mono);font-size:15px;letter-spacing:.12em;font-weight:750;background:#f4f1e8;color:#1a1a1a;display:inline-block;padding:2px 8px 3px;border-radius:4px;border:2px solid #d7d1c3;white-space:nowrap}
+  .noplate{font-size:12.5px;color:var(--muted)}
+  .meta{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .warn{font-size:11.5px;color:var(--warn);margin-top:3px}
+  .rep{display:inline-block;font-size:11px;padding:1px 6px;border-radius:5px;background:rgba(239,83,80,.15);color:#ff8a80;border:1px solid rgba(239,83,80,.35);margin-left:6px;vertical-align:2px}
+  .tag{font-size:11px;padding:2px 7px;border-radius:5px;background:rgba(88,166,255,.12);color:#8ec1ff;border:1px solid rgba(88,166,255,.3);text-transform:uppercase;letter-spacing:.05em}
+  .thumbs{display:flex;gap:6px}
+  .thumbs img{width:64px;height:48px;object-fit:cover;border-radius:5px;border:1px solid var(--line);background:#000;cursor:zoom-in}
+  .thumbs .ph{width:64px;height:48px;border-radius:5px;border:1px dashed var(--line);display:grid;place-items:center;font-size:10px;color:var(--muted)}
+  td.src{font-size:12px;color:var(--muted);max-width:220px}
+  td.src div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .acts{display:flex;gap:6px;flex-wrap:wrap}
+  .empty{color:var(--muted);text-align:center;padding:40px 10px}
+  input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+  /* small screens: rows become cards */
+  @media (max-width:900px){
+    thead{display:none}
+    table,tbody,tr,td{display:block;width:100%}
+    tr{border:1px solid var(--line);border-radius:var(--radius);margin-bottom:10px;padding:8px;background:var(--panel)}
+    td{border:none;padding:5px 4px}
+    td.src{max-width:none}
+  }
+  /* detail drawer */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;z-index:20;overflow:auto;padding:30px 16px}
+  .modal.show{display:block}
+  .sheet{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:1100px;margin:0 auto;padding:18px}
+  .sheet h2{margin:0;font-size:17px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sheet .grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px;margin-top:14px}
+  @media (max-width:800px){.sheet .grid{grid-template-columns:1fr}}
+  .gif{background:#000;border-radius:8px;overflow:hidden;aspect-ratio:16/9;display:grid;place-items:center;color:var(--muted)}
+  .gif img{width:100%;height:100%;object-fit:contain}
+  dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;font-size:13px}
+  dt{color:var(--muted)} dd{margin:0;font-family:var(--mono);font-size:12.5px;word-break:break-word}
+  .pics{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:16px}
+  .pic{background:#000;border:1px solid var(--line);border-radius:8px;overflow:hidden;position:relative}
+  .pic img{width:100%;height:120px;object-fit:contain;display:block;cursor:zoom-in}
+  .pic .cap{display:flex;justify-content:space-between;align-items:center;padding:5px 7px;font-size:11.5px;color:var(--muted);background:var(--panel2)}
+  .pic .cap a{color:var(--accent);text-decoration:none}
+  .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.9);display:none;place-items:center;z-index:30;cursor:zoom-out}
+  .lightbox.show{display:grid}
+  .lightbox img{max-width:95vw;max-height:92vh;border-radius:8px}
+  .toast{position:fixed;bottom:18px;right:18px;background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:8px;display:none;z-index:40}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">W</div>
+  <div>
+    <h1>Event log</h1>
+    <div class="sub">Every littering event from every analysis · evidence downloads</div>
+  </div>
+  <div class="spacer"></div>
+  <a class="btn sm" href="/">← Dashboard</a>
+</header>
+
+<main>
+  <div class="card">
+    <div class="filters">
+      <label class="f grow">Search plate, video or analysis
+        <input id="q" placeholder="e.g. KL31D3873 or KL 31" autocomplete="off"></label>
+      <label class="f">From <input id="from" type="date"></label>
+      <label class="f">To <input id="to" type="date"></label>
+      <label class="f">Show
+        <select id="kind">
+          <option value="">All events</option>
+          <option value="plate">Plate read</option>
+          <option value="noplate">No plate</option>
+          <option value="review">Needs review</option>
+        </select></label>
+      <label class="f">Culprit
+        <select id="vclass">
+          <option value="">Any</option>
+          <option value="car">Car</option><option value="motorcycle">Motorcycle / scooter</option>
+          <option value="bicycle">Bicycle</option><option value="truck">Truck</option><option value="bus">Bus</option>
+          <option value="person">Pedestrian</option>
+        </select></label>
+      <button class="btn" id="reset">Clear</button>
+      <label class="check"><input type="checkbox" id="auto" checked> Auto-refresh</label>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v" id="kTotal">0</div><div class="l">Events</div></div>
+    <div class="kpi"><div class="v" id="kPlates">0</div><div class="l">With a plate read</div></div>
+    <div class="kpi"><div class="v" id="kReview">0</div><div class="l">Need review</div></div>
+    <div class="kpi"><div class="v" id="kRepeat">0</div><div class="l">Repeat plates</div></div>
+  </div>
+
+  <div class="card">
+    <div class="bar">
+      <label class="check"><input type="checkbox" id="all"> Select all</label>
+      <button class="btn sm primary" id="dlSel" disabled>⬇ Evidence for selected</button>
+      <a class="btn sm" id="dlCsv" href="/api/events.csv">⬇ CSV of this list</a>
+      <span class="info" id="info"></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th style="width:28px"></th><th>When</th><th>Plate</th><th>Culprit</th><th>Evidence</th><th>Source</th><th></th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+<div class="lightbox" id="lb"><img id="lbImg" alt=""></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = { get(k){ try{return JSON.parse(localStorage.getItem('log:'+k))}catch(e){return null} }, set(k,v){ try{localStorage.setItem('log:'+k,JSON.stringify(v))}catch(e){} } };
+function toast(m, ms=3000){ const t=$('#toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',ms); }
+
+let events = [], repeats = {}, selected = new Set(), lastSig = '';
+const key = e => `${e.job}#${e.id}`;
+const base = e => `/files/${encodeURIComponent(e.job)}/${encodeURIComponent(e.dir)}/`;
+const needsReview = e => e.ambiguous || !e.plate_text;
+const who = e => e.culprit_type === 'vehicle' ? (e.vehicle_class || 'vehicle')
+               : e.culprit_type === 'unknown' ? 'not identified' : (e.culprit_type || '');
+
+function params(){
+  const p = new URLSearchParams();
+  for (const id of ['q','from','to','kind','vclass']) { const v = $('#'+id).value.trim(); if (v) p.set(id, v); }
+  return p;
+}
+function saveFilters(){ store.set('f', Object.fromEntries(['q','from','to','kind','vclass'].map(id => [id, $('#'+id).value]))); }
+(function loadFilters(){ const f = store.get('f') || {}; for (const id in f) if ($('#'+id)) $('#'+id).value = f[id]; })();
+
+async function load(force){
+  const p = params();
+  $('#dlCsv').href = '/api/events.csv' + (p.toString() ? '?' + p : '');
+  let r;
+  try { r = await (await fetch('/api/events?' + p)).json(); } catch (e) { return; }
+  const sig = JSON.stringify([r.total, r.events.map(e => [e.job, e.id, e.plate_text, e.gif_ready, e.platecam_status])]);
+  if (!force && sig === lastSig) return;
+  lastSig = sig;
+  events = r.events; repeats = r.repeat_plates || {};
+  const valid = new Set(events.map(key));
+  for (const k of [...selected]) if (!valid.has(k)) selected.delete(k);
+  render(r.total);
+}
+
+function render(total){
+  $('#kTotal').textContent = total;
+  $('#kPlates').textContent = events.filter(e => e.plate_text).length;
+  $('#kReview').textContent = events.filter(needsReview).length;
+  $('#kRepeat').textContent = Object.values(repeats).filter(n => n > 1).length;
+  $('#info').textContent = total > events.length ? `Showing newest ${events.length} of ${total}` : `${total} event${total===1?'':'s'}`;
+  const body = $('#rows');
+  if (!events.length) { body.innerHTML = '<tr><td colspan="7" class="empty">No events match these filters.</td></tr>'; syncSel(); return; }
+  body.innerHTML = events.map((e, i) => {
+    const f = e.files || {}, b = base(e), k = key(e);
+    const rep = e.plate_norm && repeats[e.plate_norm] > 1 ? `<span class="rep" title="Same plate on ${repeats[e.plate_norm]} events">×${repeats[e.plate_norm]}</span>` : '';
+    const plate = e.plate_text
+      ? `<span class="plate">${esc(e.plate_text)}</span>${rep}
+         <div class="meta">${e.plate_from==='plate_cam'?'plate camera':esc(e.plate_from||'overview')}${e.plate_votes?' · '+esc(e.plate_votes):''}</div>`
+      : `<div class="noplate">${e.plate_status==='pending'?'Reading…':(f.plate?'Plate photo, number not read':'No plate')}</div>`;
+    const warn = e.ambiguous ? '<div class="warn">⚠ similar vehicle in plate camera — check photos</div>' : '';
+    const th = (fn, label) => fn ? `<img src="${b}${esc(fn)}" alt="${label}" title="${label}" data-full="${b}${esc(fn)}">` : `<div class="ph">${label}</div>`;
+    return `<tr class="${selected.has(k)?'sel':''}" data-i="${i}">
+      <td><input type="checkbox" data-k="${esc(k)}" ${selected.has(k)?'checked':''} aria-label="Select event"></td>
+      <td class="when"><b>${esc(e.when)}</b><div>${esc(e.date)}</div></td>
+      <td>${plate}${warn}</td>
+      <td><span class="tag">${esc(who(e))}</span>${e.track_id!=null?`<div class="meta">track #${esc(e.track_id)}</div>`:''}${e.hidden?'<div class="meta">seen, then hidden</div>':''}</td>
+      <td><div class="thumbs">${th(f.vehicle,'Vehicle')}${th(f.pc_vehicle||f.plate,'Plate cam')}${th(f.waste,'Waste')}</div></td>
+      <td class="src"><div title="${esc(e.video)}">${e.live?'📡 ':''}${esc(e.video)}</div><div>${esc(e.job)} · event ${e.id}</div></td>
+      <td><div class="acts">
+        <button class="btn sm" data-open="${i}">View</button>
+        <a class="btn sm" href="/api/job/${encodeURIComponent(e.job)}/event/${e.id}/evidence.zip">⬇ ZIP</a>
+      </div></td>
+    </tr>`;
+  }).join('');
+  syncSel();
+}
+
+function syncSel(){
+  $('#dlSel').disabled = !selected.size;
+  $('#dlSel').textContent = selected.size ? `⬇ Evidence for ${selected.size} selected` : '⬇ Evidence for selected';
+  $('#all').checked = events.length > 0 && events.every(e => selected.has(key(e)));
+}
+
+$('#rows').addEventListener('change', ev => {
+  const cb = ev.target.closest('input[type=checkbox]'); if (!cb) return;
+  cb.checked ? selected.add(cb.dataset.k) : selected.delete(cb.dataset.k);
+  cb.closest('tr').classList.toggle('sel', cb.checked); syncSel();
+});
+$('#all').onchange = e => { events.forEach(x => e.target.checked ? selected.add(key(x)) : selected.delete(key(x))); render(Number($('#kTotal').textContent)); };
+$('#rows').addEventListener('click', ev => {
+  const img = ev.target.closest('img[data-full]'); if (img) { openLb(img.dataset.full); return; }
+  const o = ev.target.closest('[data-open]'); if (o) openDetail(events[+o.dataset.open]);
+});
+
+$('#dlSel').onclick = async () => {
+  const items = [...selected].map(k => { const [job, id] = k.split('#'); return { job, id: +id }; });
+  $('#dlSel').disabled = true; $('#dlSel').textContent = 'Preparing ZIP…';
+  try {
+    const res = await fetch('/api/events/evidence.zip', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
+    if (!res.ok) { toast((await res.json()).error || 'Download failed', 5000); return; }
+    const blob = await res.blob();
+    const name = (res.headers.get('Content-Disposition') || '').match(/filename=([^;]+)/);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = name ? name[1].replace(/"/g,'') : 'waste_evidence.zip'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } finally { syncSel(); }
+};
+
+/* detail */
+function openDetail(e){
+  const f = e.files || {}, b = base(e);
+  const labels = { vehicle:'Vehicle (overview)', scene:'Scene at the spot', waste:'Waste', plate:'Plate crop',
+                   pc_scene:'Plate camera frame', pc_vehicle:'Plate camera vehicle', pc_plate:'Plate camera plate' };
+  const pics = Object.entries(f).filter(([k]) => k !== 'gif' && !(k === 'pc_plate' && f.plate === f.pc_plate))
+    .map(([k, fn]) => `<div class="pic"><img src="${b}${esc(fn)}" data-full="${b}${esc(fn)}" alt="${esc(labels[k]||k)}">
+      <div class="cap"><span>${esc(labels[k]||k)}</span><a href="${b}${esc(fn)}" download="${esc(e.job)}_ev${e.id}_${esc(fn)}">⬇</a></div></div>`).join('');
+  $('#sheet').innerHTML = `
+    <h2>Event ${e.id} ${e.plate_text?`<span class="plate">${esc(e.plate_text)}</span>`:''} <span class="tag">${esc(who(e))}</span>
+      <span class="spacer"></span>
+      <a class="btn sm primary" href="/api/job/${encodeURIComponent(e.job)}/event/${e.id}/evidence.zip">⬇ Evidence ZIP</a>
+      <button class="btn sm" id="close">Close</button></h2>
+    ${e.ambiguous?'<div class="warn" style="margin-top:8px">⚠ Two similar vehicles passed the plate camera together. Compare the overview and plate camera photos before acting.</div>':''}
+    <div class="grid">
+      <div class="gif">${f.gif?`<img src="${b}${esc(f.gif)}" alt="Action GIF">`:'GIF not ready'}</div>
+      <dl>
+        <dt>Date</dt><dd>${esc(e.date)}</dd>
+        <dt>Waste at rest</dt><dd>${esc(e.when)}</dd>
+        ${e.culprit_time_str?`<dt>Culprit at spot</dt><dd>${esc(e.culprit_time_str)}</dd>`:''}
+        ${e.gif_range?`<dt>Clip</dt><dd>${esc(e.gif_range[0])} → ${esc(e.gif_range[1])}</dd>`:''}
+        <dt>Culprit</dt><dd>${esc(who(e))}${e.track_id!=null?' #'+esc(e.track_id):''}</dd>
+        <dt>Plate</dt><dd>${esc(e.plate_text || 'not read')}</dd>
+        ${e.plate_text?`<dt>Read from</dt><dd>${e.plate_from==='plate_cam'?'plate camera':esc(e.plate_from||'')}${e.plate_votes?' · '+esc(e.plate_votes):''}</dd>`:''}
+        ${e.plate_conf!=null?`<dt>Confidence</dt><dd>${Math.round(e.plate_conf*100)}%</dd>`:''}
+        ${e.plate_overview?`<dt>Overview read</dt><dd>${esc(e.plate_overview)}</dd>`:''}
+        ${e.match_method?`<dt>Matched by</dt><dd>${esc(e.match_method)}</dd>`:''}
+        ${e.plate_norm && repeats[e.plate_norm]>1?`<dt>Repeat</dt><dd>same plate on ${repeats[e.plate_norm]} events</dd>`:''}
+        <dt>Overview</dt><dd>${esc(e.video)}</dd>
+        ${e.plate_video?`<dt>Plate camera</dt><dd>${esc(e.plate_video)}</dd>`:''}
+        <dt>Analysis</dt><dd>${esc(e.job)}</dd>
+      </dl>
+    </div>
+    <div class="pics">${pics}</div>`;
+  $('#modal').classList.add('show');
+  $('#close').onclick = closeDetail;
+}
+function closeDetail(){ $('#modal').classList.remove('show'); }
+$('#modal').addEventListener('click', ev => {
+  if (ev.target.id === 'modal') closeDetail();
+  const img = ev.target.closest('img[data-full]'); if (img) openLb(img.dataset.full);
+});
+function openLb(src){ $('#lbImg').src = src; $('#lb').classList.add('show'); }
+$('#lb').onclick = () => $('#lb').classList.remove('show');
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') { $('#lb').classList.remove('show'); closeDetail(); } });
+
+/* filters */
+let qT;
+for (const id of ['q','from','to','kind','vclass']) {
+  $('#'+id).addEventListener(id === 'q' ? 'input' : 'change', () => { clearTimeout(qT); qT = setTimeout(() => { saveFilters(); load(true); }, id === 'q' ? 300 : 0); });
+}
+$('#reset').onclick = () => { for (const id of ['q','from','to','kind','vclass']) $('#'+id).value = ''; saveFilters(); load(true); };
+$('#auto').checked = store.get('auto') !== false;
+$('#auto').onchange = e => store.set('auto', e.target.checked);
+setInterval(() => { if ($('#auto').checked && !$('#modal').classList.contains('show')) load(false); }, 8000);
+load(true);
+</script>
+</body>
+</html>

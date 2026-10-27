@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import collections
 import datetime as _dt
+import json
 import os
 import re
 import threading
@@ -417,6 +418,66 @@ class _Group:
         return self.cls_votes.most_common(1)[0][0]
 
 
+class Calibration:
+    """What the system has learned about this camera pair from confident matches.
+
+    `delay` is how long after passing the dumping spot a vehicle is at its closest in
+    the plate camera. Kept per mode ("clip" / "live"): clip sync already absorbs part
+    of the travel time, live arrival stamps do not.
+    """
+
+    MIN_SAMPLES = 5
+    KEEP = 60
+
+    def __init__(self, path, key="live", log=print):
+        self.path, self.key, self.log = path, key, log
+        self._lock = threading.Lock()
+
+    def _read(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def delay(self):
+        """(median delay, tolerance) once there are enough samples, else None."""
+        with self._lock:
+            d = self._read().get(self.key, {}).get("delays", [])
+        if len(d) < self.MIN_SAMPLES:
+            return None
+        arr = np.array(d[-self.KEEP:], np.float32)
+        med = float(np.median(arr))
+        mad = float(np.median(np.abs(arr - med))) * 1.4826
+        return med, max(0.8, 2.5 * mad)
+
+    def samples(self):
+        with self._lock:
+            return len(self._read().get(self.key, {}).get("delays", []))
+
+    def add(self, delay):
+        with self._lock:
+            data = self._read()
+            ent = data.setdefault(self.key, {"delays": []})
+            ent["delays"] = (ent.get("delays", []) + [round(float(delay), 3)])[-self.KEEP:]
+            tmp = self.path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=1)
+                os.replace(tmp, self.path)
+            except OSError as e:
+                self.log(f"calibration not saved: {e}")
+
+
+def _pct_ranks(values):
+    """0 for the smallest value, 1 for the largest; ties share a rank."""
+    n = len(values)
+    if n < 2 or max(values) - min(values) < 1e-6:
+        return [0.5] * n
+    order = np.argsort(np.argsort(values, kind="stable"), kind="stable")
+    return [float(o) / (n - 1) for o in order]
+
+
 class PlateCamMatcher:
     max_reads = 40                     # OCR attempts per event (largest, sharpest views first; OCR is cheap)
 
@@ -542,12 +603,134 @@ class PlateCamMatcher:
         return frame[y1:y2, x1:x2]
 
     # ---------------------------------------------------------------- main entry
+    # ---------------------------------------------------------------- order + lane matching
+    @staticmethod
+    def _pass_obs(g):
+        """The observation where the vehicle is closest to the plate camera (largest box)."""
+        return max(g.obs, key=lambda o: (o[2][2] - o[2][0]) * (o[2][3] - o[2][1]))
+
+    @staticmethod
+    def _lane_pl(box, frame_w, verge_side):
+        """How far the vehicle is from the verge side of the plate view, in vehicle widths."""
+        bw = max(box[2] - box[0], 1.0)
+        return (box[0] / bw) if verge_side < 0 else ((frame_w - box[2]) / bw)
+
+    def _align(self, context, groups, samples, fw, verge_side, delay, t_expect):
+        """Pair overview vehicles with plate-camera vehicles, keeping their order.
+
+        On one stretch of road vehicles pass both cameras in the same order, so the
+        sequence seen by the overview is lined up against the sequence seen by the
+        plate camera, like aligning two lists (vehicles one camera missed are skipped).
+        Each pairing costs:
+          type      two-wheeler vs car/bus/truck must agree
+          colour    colour signature of the two views
+          lane      near-verge vehicles pair with near-verge vehicles
+          time      once the travel time is learned, how far off it is
+        Returns (pairs {ctx index: group index}, cost matrix, total cost).
+        """
+        n, m = len(context), len(groups)
+        ov_order = sorted(range(n), key=lambda i: context[i]["t_pass"])
+        pl_pass = [self._pass_obs(g) for g in groups]
+        pl_order = sorted(range(m), key=lambda j: pl_pass[j][0])
+        # lane in vehicle widths from the verge; anything beyond ~10 is simply "far"
+        lane_raw = [min(10.0, float(c.get("lane", 0.0))) for c in context]
+        lane_ov = _pct_ranks(lane_raw)
+        lane_pl = _pct_ranks([self._lane_pl(o[2], fw, verge_side) for o in pl_pass])
+        hist_ov = [_hist(_unjpeg(c["jpeg"])) if c.get("jpeg") else None for c in context]
+        hist_pl = []
+        for g in groups:
+            views = sorted(g.obs, key=lambda o: -(o[2][2] - o[2][0]) * (o[2][3] - o[2][1]))[:3]
+            hist_pl.append([_hist(self._crop(samples[o[1]][1], o[2])) for o in views])
+        cost = np.zeros((n, m), np.float32)
+        info = {}
+        for i in range(n):
+            for j in range(m):
+                c = context[i]
+                type_ok = _group_of(c["cls"]) == _group_of(groups[j].cls)
+                app = float(np.mean([_similar(hist_ov[i], h) for h in hist_pl[j]])) if hist_pl[j] else 0.0
+                dt = pl_pass[j][0] - c["t_pass"]
+                if delay is not None:
+                    tterm = min(3.0, abs(dt - delay[0]) / delay[1])
+                else:
+                    # no learned travel time yet: only very large gaps count against a pair
+                    tterm = 0.05 * max(0.0, abs(dt) - 3.0)
+                lterm = 0.5 * abs(lane_ov[i] - lane_pl[j]) if n > 1 and m > 1 else 0.0
+                cost[i, j] = (0.0 if type_ok else 2.5) + 1.2 * (1.0 - app) + tterm + lterm
+                info[(i, j)] = {"app": app, "type_ok": type_ok, "dt": dt, "lane": lterm, "time": tterm}
+        # A vehicle one camera did not see. The plate camera is zoomed on the near lane,
+        # so a far-lane overview vehicle is often not in it at all: cheap to skip.
+        skip_ov_cost = [1.5 if lane_raw[i] <= 2.5 else 0.45 for i in range(n)]
+        skip_pl = 0.6
+        INF = 1e9
+
+        def solve(forbid=None):
+            D = np.full((n + 1, m + 1), INF, np.float64)
+            back = np.zeros((n + 1, m + 1), np.int8)
+            D[0, 0] = 0.0
+            for a in range(n + 1):
+                for b in range(m + 1):
+                    if a == 0 and b == 0:
+                        continue
+                    best, how = INF, 0
+                    if a > 0 and b > 0:
+                        i, j = ov_order[a - 1], pl_order[b - 1]
+                        if (i, j) != forbid:
+                            v = D[a - 1, b - 1] + cost[i, j]
+                            if v < best:
+                                best, how = v, 1
+                    if a > 0 and D[a - 1, b] + skip_ov_cost[ov_order[a - 1]] < best:
+                        best, how = D[a - 1, b] + skip_ov_cost[ov_order[a - 1]], 2
+                    if b > 0 and D[a, b - 1] + skip_pl < best:
+                        best, how = D[a, b - 1] + skip_pl, 3
+                    D[a, b], back[a, b] = best, how
+            pairs, a, b = {}, n, m
+            while a > 0 or b > 0:
+                how = back[a, b]
+                if how == 1:
+                    pairs[ov_order[a - 1]] = pl_order[b - 1]
+                    a, b = a - 1, b - 1
+                elif how == 2:
+                    a -= 1
+                else:
+                    b -= 1
+            return pairs, float(D[n, m])
+
+        if delay is None and n >= 2:
+            # No learned travel time yet: estimate it from this window. Every overview
+            # vehicle votes for the delay that pairs it with a similar-looking vehicle of
+            # the same type; the delay most vehicles agree on is the travel time.
+            grid = np.arange(-6.0, 6.01, 0.1)
+            votes = np.zeros_like(grid)
+            for i in range(n):
+                best = np.zeros_like(grid)
+                for j in range(m):
+                    inf = info[(i, j)]
+                    if not inf["type_ok"]:
+                        continue
+                    best = np.maximum(best, inf["app"] * np.exp(-((inf["dt"] - grid) / 0.6) ** 2))
+                votes += best
+            k = int(np.argmax(votes))
+            # a clear peak, supported by more than one vehicle's worth of votes
+            if votes[k] >= 0.8 and votes[k] >= 1.25 * float(np.median(votes) + 1e-6):
+                med, tol = float(grid[k]), 0.8
+                for (i, j), inf in info.items():
+                    old = inf["time"]
+                    inf["time"] = min(3.0, abs(inf["dt"] - med) / tol)
+                    cost[i, j] += inf["time"] - old
+                info["_window_delay"] = (round(med, 2), tol)
+        pairs, total = solve()
+        return pairs, cost, info, total, solve
+
     def match(self, source, culprit_jpeg, culprit_cls, t_from, t_to, t_expect, out_dir,
-              step_sec=0.12, max_frames=60):
+              step_sec=0.12, max_frames=60, context=None, verge_side=-1, calib=None):
         """Find the culprit in the plate camera and read its plate.
 
         t_from..t_to   window to search (overview timeline)
         t_expect       (start, end) when the culprit is most likely in the plate view
+        context        overview vehicles in the window: [{"cls", "t_pass", "lane", "jpeg",
+                       "culprit": bool}], used to match by order and lane
+        verge_side     -1 when the verge is on the left of the plate view, +1 on the right
+        calib          Calibration: learned travel time between the cameras
         Returns a dict (see bottom) or None when the plate camera had no frames.
         """
         t_start = time.time()
@@ -582,6 +765,45 @@ class PlateCamMatcher:
         best_score, g, app, gap, type_ok = scored[0]
         same_type = [s for s in scored if s[4]]
         ambiguous = len(same_type) > 1 and same_type[0][1] is g and same_type[0][0] - same_type[1][0] < 0.15
+        method = "best single match"
+        delay = calib.delay() if calib is not None else None
+        learned = []
+
+        # Order + lane: line up every overview vehicle with the plate-camera vehicles.
+        ci = next((i for i, c in enumerate(context or []) if c.get("culprit")), None)
+        if ci is not None and len(groups) >= 1:
+            try:
+                pairs, cost, info, total, solve = self._align(context, groups, samples, fw, verge_side, delay, t_expect)
+            except Exception as e:  # noqa: BLE001 - fall back to the single-vehicle score
+                self.log(f"plate camera: order matching failed ({e}), using best single match")
+                pairs = {}
+            if ci in pairs:
+                j = pairs[ci]
+                g = groups[j]
+                inf = info[(ci, j)]
+                app, type_ok = inf["app"], inf["type_ok"]
+                gap = max(0.0, t_expect[0] - g.obs[-1][0], g.obs[0][0] - t_expect[1])
+                best_score = round(3.2 - float(cost[ci, j]), 3)
+                # how much worse is the best arrangement that gives the culprit another vehicle?
+                _p2, total2 = solve(forbid=(ci, j))
+                margin = total2 - total
+                ambiguous = margin < 0.35
+                wd = info.get("_window_delay")
+                method = "order + lane" + (" + learned timing" if delay else (" + timing from this window" if wd else ""))
+                # learn the travel time from this and other clear pairs
+                if calib is not None:
+                    if not ambiguous and type_ok and app >= 0.45:
+                        learned.append(inf["dt"])
+                    for i2, j2 in pairs.items():
+                        if i2 == ci or len(learned) >= 4 or (i2, j2) not in info:
+                            continue
+                        f2 = info[(i2, j2)]
+                        if f2["type_ok"] and f2["app"] >= 0.6 and cost[i2, j2] < 0.7:
+                            learned.append(f2["dt"])
+                    for dt in learned:
+                        calib.add(dt)
+            elif ci is not None and pairs is not None and len(context) > 1:
+                method = "best single match (culprit not lined up)"
 
         # Read the plate on every frame where that vehicle is in view, not only the
         # sampled ones: a plate is sharp on just a few frames while it moves.
@@ -618,6 +840,10 @@ class PlateCamMatcher:
             "plate_norm": None, "plate_conf": None, "votes": None,
             "seen_from": _fmt_clock(g.obs[0][0], source.live), "seen_to": _fmt_clock(g.obs[-1][0], source.live),
             "files": {}, "secs": None,
+            "method": method,
+            "overview_vehicles": len(context or []),
+            "learned_delay": (round(delay[0], 2) if delay else None),
+            "delay_samples": (calib.samples() if calib is not None else 0),
             "alternatives": [{"class": VEHICLES.get(s[1].cls), "score": round(s[0], 2), "appearance": round(s[2], 2),
                               "seen": f"{_fmt_clock(s[1].obs[0][0], source.live)}-{_fmt_clock(s[1].obs[-1][0], source.live)}"}
                              for s in scored[1:4]],

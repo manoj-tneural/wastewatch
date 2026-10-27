@@ -118,6 +118,31 @@ The plate camera is buffered separately at full resolution, 8 frames per second,
 - Shutter 1/1000 s (day), 1/500 s (night), IR at night, H.265 (not H.265+), 25 fps, max bitrate.
 - Set both cameras to NTP / the NVR's time so their clocks match.
 
+### Matching the culprit across cameras (order + lane + timing)
+Every vehicle the overview saw in the search window is lined up against every vehicle the
+plate camera saw, keeping their order — on one stretch of road vehicles pass both cameras
+in the same order, so two identical white cars cannot swap places. Each pairing is scored on
+vehicle type, colour, lane (distance from the verge, in vehicle widths) and timing.
+- Timing: until the system has learned the travel time between the cameras, it estimates it
+  from the vehicles in the same window. Every confident match is stored in
+  `outputs/platecam_calib.json`; after 5 samples the learned travel time is used.
+- A far-lane overview vehicle that the zoomed plate camera never sees is skipped cheaply.
+- `ambiguous` is set when giving the culprit a different plate-camera vehicle is almost as
+  good an arrangement — check the photos before acting.
+- `plate_verge_side` (default `same`): set `left`/`right` if the plate camera is mounted so the
+  verge is on the other side of its picture.
+
+## Event log
+Open **Event log** (top of the dashboard, or `/events`). It lists every event from every
+analysis, newest first, and refreshes itself while live jobs run.
+- Search by plate (spaces optional), video or analysis; filter by date, culprit type,
+  "Plate read", "No plate" or "Needs review" (no plate, or an ambiguous match).
+- Repeat plates are marked (×2, ×3…).
+- **View** shows the GIF, every photo (each downloadable) and the match details.
+- **ZIP** downloads one event's evidence: all photos, the GIF, `event.json` and a readable
+  `summary.txt`. Tick several events and use **Evidence for selected** for one ZIP with a
+  folder per event plus `events.csv`. **CSV of this list** exports the filtered list.
+
 ## Tuning (Detection settings panel)
 
 | Setting | When to change |
