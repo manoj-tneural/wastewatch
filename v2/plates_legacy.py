@@ -1,4 +1,9 @@
-"""Read a registration number from a vehicle snapshot.
+"""The original single-snapshot plate reader, kept as a second opinion.
+
+plates.py is the main reader. This one is only asked when the main reader is not
+sure, so the system never reads a plate worse than it did before.
+
+Read a registration number from a vehicle snapshot.
 
 A plate is a bright rectangle (white or yellow) with dark characters, often on
 the lower half of the vehicle. Two-line plates, usual on two-wheelers, are
@@ -317,7 +322,8 @@ class PlateReader:
                 return False
             try:
                 from fast_plate_ocr import LicensePlateRecognizer
-                self._ocr = LicensePlateRecognizer(self.model_name, device="cpu")
+                from .plates import ort_options
+                self._ocr = LicensePlateRecognizer(self.model_name, device="cpu", sess_options=ort_options())
                 self.status = "ready"
                 return True
             except Exception as e:  # noqa: BLE001 - a missing model must not stop detection
@@ -329,16 +335,8 @@ class PlateReader:
         if bgr is None or bgr.size == 0 or bgr.shape[0] < 8 or bgr.shape[1] < 12:
             return "", 0.0
         bgr = _fit_aspect(bgr, 2.0)
-        fd, path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
-        try:
-            cv2.imwrite(path, bgr)
-            pred = self._ocr.run(path, return_confidence=True)[0]
-        finally:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        # in memory (the original wrote a temporary PNG and read it back: same pixels, much slower)
+        pred = self._ocr.run(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), return_confidence=True)[0]
         text = re.sub(r"[^A-Z0-9]", "", (getattr(pred, "plate", "") or "").upper())
         probs = getattr(pred, "char_probs", None)
         conf = float(np.mean(probs)) if probs is not None and len(probs) else 0.0

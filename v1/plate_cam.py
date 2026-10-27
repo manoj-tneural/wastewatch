@@ -29,7 +29,7 @@ import time
 import cv2
 import numpy as np
 
-from plates import PlateReader, edit_distance
+from .plates import PlateReader, edit_distance
 
 PERSON = 0
 VEHICLES = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
@@ -125,6 +125,78 @@ def offset_by_motion(overview_path, plate_path, around=None, search=None, max_se
         if s > best[1]:
             best = (round(off, 2), s)
     return best[0], round(best[1], 3)
+
+
+_OSD_OCR = None
+
+
+def _osd_seconds(frame):
+    """Clock burned into the picture (VIGI OSD, top left: 'MM-DD-YYYY Ddd HH:MM:SS'), as
+    seconds since midnight, or None. Only the six time digits are cut out and read;
+    the font is fixed-width, so their place is known."""
+    global _OSD_OCR
+    if _OSD_OCR is None:
+        from rapidocr_onnxruntime import RapidOCR
+        _OSD_OCR = RapidOCR()
+    H, W = frame.shape[:2]
+    sx, sy = W / 2560, H / 1440
+    x0, pitch, y0, y1 = 66, 31.65, 60, 134
+    parts = []
+    for i in (15, 16, 18, 19, 21, 22):
+        parts.append(frame[int(y0 * sy):int(y1 * sy), int((x0 + i * pitch) * sx):int((x0 + (i + 1) * pitch) * sx)])
+        if i in (16, 19):
+            parts.append(np.zeros((parts[-1].shape[0], max(1, int(12 * sx)), 3), np.uint8))
+    img = np.hstack(parts)
+    img = cv2.resize(img, None, fx=48 / img.shape[0], fy=48 / img.shape[0])
+    res, _ = _OSD_OCR(img, use_det=False, use_cls=False, use_rec=True)
+    d = re.sub(r"\D", "", res[0][0]) if res else ""
+    if len(d) != 6:
+        return None
+    hh, mm, ss = int(d[:2]), int(d[2:4]), int(d[4:])
+    if hh > 23 or mm > 59 or ss > 59:
+        return None
+    return hh * 3600 + mm * 60 + ss
+
+
+def osd_start(path):
+    """Clock time of the first frame of a clip, to a frame, from the burned-in OSD.
+
+    The OSD shows whole seconds, so the clip start is found from the frame where the
+    seconds digit first changes. Returns seconds since midnight, or None.
+    """
+    cap = cv2.VideoCapture(path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    fps = fps if 1 < fps < 240 else 25
+    try:
+        ok, f0 = cap.read()
+        s0 = _osd_seconds(f0) if ok else None
+        if s0 is None:
+            return None
+        prev_i, i = 0, 0
+        while i < int(fps * 1.2):
+            i = min(prev_i + 2, int(fps * 1.2))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ok, f = cap.read()
+            if not ok:
+                return None
+            s = _osd_seconds(f)
+            if s is None:
+                prev_i = i
+                continue
+            if s != s0:
+                # the tick is between prev_i and i; check the middle frame
+                if i - prev_i == 2:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, prev_i + 1)
+                    ok, fm = cap.read()
+                    if ok and _osd_seconds(fm) == s:
+                        i = prev_i + 1
+                if (s - s0) % 86400 != 1:
+                    return None
+                return s - i / fps
+            prev_i = i
+        return None
+    finally:
+        cap.release()
 
 
 def resolve_offset(overview_path, plate_path, overview_name=None, plate_name=None, log=print):

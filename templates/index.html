@@ -94,6 +94,38 @@
   .warn{font-size:11.5px;color:var(--warn);margin:2px 0 8px}
   .legend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
   .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+  .logbox{background:#0b0e12;border:1px solid var(--line);border-radius:8px;height:260px;overflow:auto;padding:8px 10px;font:12px/1.5 var(--mono)}
+  .logbox .ln{white-space:pre-wrap;word-break:break-word}
+  .logbox .t{color:var(--muted);margin-right:8px}
+  .logbox .k{display:inline-block;min-width:54px;margin-right:6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em}
+  .logbox .k.match{color:var(--info)} .logbox .k.plate{color:var(--accent)} .logbox .k.event{color:var(--danger)}
+  .logbox .k.sync{color:var(--warn)} .logbox .k.info{color:var(--muted)}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{background:var(--panel2);border:0;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:12px}
+  .seg button.on{background:var(--line);color:var(--text)}
+  .trace table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}
+  .trace th,.trace td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+  .trace th{color:var(--muted);font-weight:500}
+  .trace tr.chosen td{background:rgba(63,182,139,.12)}
+  .trace .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;margin:6px 0}
+  .trace .kv span{color:var(--muted)}
+  .trace .tbl{overflow-x:auto}
+  .mlog-wrap{overflow-x:auto}
+  .mlog{width:100%;border-collapse:collapse;font-size:12.5px;min-width:760px}
+  .mlog th{color:var(--muted);font-weight:500;text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .mlog td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .mlog img{display:block;width:220px;max-width:100%;border-radius:6px;border:1px solid var(--line);cursor:zoom-in;background:#000}
+  .mlog img.pl{width:150px}
+  .mlog .tm{font-family:var(--mono);font-size:13px;white-space:nowrap}
+  .mlog .sub{color:var(--muted);font-size:11.5px;margin-top:3px}
+  .mlog .ocr{font-family:var(--mono);font-size:16px;font-weight:700;letter-spacing:.04em}
+  .mlog .ocr.guess{color:var(--warn)}
+  .mlog .na{color:var(--muted);font-size:12px}
+  .pair{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:14px;background:var(--panel2)}
+  .pair .pcam-h{margin-top:0}
+  .uc{background:rgba(240,180,41,.22);color:var(--warn);border-bottom:2px dotted var(--warn);border-radius:3px;padding:0 1px;cursor:help}
+  details.card > summary{list-style:none} details.card > summary::-webkit-details-marker{display:none}
+  details.card > summary h2::before{content:'▸ ';} details.card[open] > summary h2::before{content:'▾ ';}
 </style>
 </head>
 <body>
@@ -113,6 +145,15 @@
   <section>
     <div class="card">
       <h2><span class="step">1</span> Cameras</h2>
+      <div class="pair">
+        <div class="pcam-h">Pair folder <span>one folder with the wide and the zoomed clip · fills both cameras</span></div>
+        <div class="row">
+          <select id="pairSel" class="hist" style="flex:1"><option value="">Sample pairs in source/…</option></select>
+          <button type="button" class="btn sm" id="pairPick" title="Pick a folder anywhere: its two videos are uploaded">Choose folder…</button>
+          <input id="pairDir" type="file" webkitdirectory directory multiple hidden>
+        </div>
+        <div id="pairMsg" class="vidinfo"></div>
+      </div>
       <div class="pcam-h">Overview <span>the verge, where waste is thrown</span></div>
       <div class="modes" id="ovModes">
         <button type="button" class="btn sm on" data-mode="file">Video upload</button>
@@ -205,11 +246,15 @@
           <label class="f" title="Scraps of one throw that land in the same spot are merged for this long. After that, or if the cover colour is clearly different, it is a new event. 0 records every dump separately.">Same-spot merge (s) <input id="s_frag" type="number" step="0.5" min="0" max="8" value="1.5"></label>
           <label class="f">GIF pre-roll (s) <input id="s_pre" type="number" step="0.5" min="0.5" max="10" value="4"></label>
           <label class="f">GIF post-roll (s) <input id="s_post" type="number" step="0.5" min="0" max="5" value="1.5"></label>
-          <label class="f" title="The plate camera is zoomed on the road. The vehicle passes it, but the throw can be earlier or later. Search this many seconds before the throw and the same amount after.">Plate cam search each side of the throw (s) <input id="s_pafter" type="number" step="0.5" min="1" max="30" value="12"></label>
+          <label class="f" title="The plate camera sees part of the road the overview also sees, so the culprit passes it while it is in the overview. Extra seconds searched before it appeared and after it left (allows for camera clocks that differ slightly).">Plate cam margin around the culprit's time in view (s) <input id="s_pafter" type="number" step="0.5" min="1" max="30" value="4"></label>
           <label class="f" title="Live cameras only. Frames per second the overview is analysed at. Lower it if the log says frames are dropped (CPU: 6-8, GPU: 25).">Live processing fps <input id="s_livefps" type="number" step="1" min="2" max="30" value="10"></label>
         </div>
       </details>
       <div class="row" style="margin-top:6px">
+        <div class="seg" id="verSel" title="Choose the version to run. Run the same clips with each to compare.">
+          <button data-v="v1">v1</button>
+          <button data-v="v2" class="on">v2</button>
+        </div>
         <button class="btn primary" id="start" disabled>▶ Start analysis</button>
         <button class="btn danger" id="stop" style="display:none">■ Stop</button>
       </div>
@@ -254,6 +299,34 @@
       </div>
       <div id="events" class="events"><div class="empty">Events will appear here as soon as waste throwing is detected.</div></div>
     </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="margin:0">Match log</h2>
+        <span style="font-size:12px;color:var(--muted)">Each throw, the same vehicle in the plate camera, and the plate read from it</span>
+      </div>
+      <div class="mlog-wrap">
+        <table class="mlog">
+          <thead><tr><th>Time</th><th>Throw (overview camera)</th><th>Same vehicle (plate camera)</th><th>Plate</th><th>OCR result</th></tr></thead>
+          <tbody id="mlogBody"><tr><td colspan="5" class="empty">Rows appear here as each throw is matched to the plate camera.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <details class="card" id="actLog">
+      <summary style="display:flex;justify-content:space-between;align-items:center;margin:0">
+        <h2 style="margin:0">Detailed activity log</h2>
+      </summary>
+      <div class="row" style="justify-content:flex-end;margin:10px 0">
+        <div class="seg" id="logFilter">
+          <button data-f="all" class="on">All</button>
+          <button data-f="match">Camera matching &amp; plates</button>
+          <button data-f="event">Events</button>
+        </div>
+        <a class="btn sm" id="dlLog" href="#" style="display:none" download>⬇ Log</a>
+      </div>
+      <div id="logbox" class="logbox"><div class="empty" style="padding:20px">The log of this analysis appears here: camera sync, each throw, how the culprit was found in the plate camera, and how its plate was read.</div></div>
+    </details>
   </section>
 </main>
 
@@ -311,6 +384,45 @@ async function loadVideos(){
 $('#videos').onchange = async e => { if(!e.target.value) return; setVideo(await (await fetch('/api/video/'+e.target.value)).json()); };
 $('#ovLiveSel').onchange = async e => { if(!e.target.value) return; setVideo(await (await fetch('/api/video/'+e.target.value)).json()); };
 
+/* ---------------- pair folder: fills both cameras ---------------- */
+async function loadPairFolders(){
+  const list = await (await fetch('/api/folders')).json();
+  $('#pairSel').innerHTML = `<option value="">${list.length ? 'Sample pairs in source/…' : 'No pair folders in source/'}</option>` +
+    list.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
+}
+async function usePair(r){
+  if(!r.wide || !r.zoom){ $('#pairMsg').textContent = r.error || 'Could not open that folder'; return; }
+  setMode('ov','file'); setMode('pl','file');
+  await loadVideos();
+  setVideo(r.wide); await setPlate(r.zoom);
+  const show = () => {
+    $('#pairMsg').innerHTML = `<b>${esc(r.folder)}</b> · wide: <b>${esc(video.name)}</b> · zoomed: <b>${esc(plate.name)}</b>
+      <span style="opacity:.75">(${esc(r.how)})</span> <button type="button" class="btn sm" id="pairSwap" title="Wide and zoomed the wrong way round?">⇄ Swap</button>`;
+    $('#pairSwap').onclick = async () => { const w = video, z = plate; setVideo(z); await setPlate(w); await loadVideos(); show(); };
+  };
+  show();
+}
+$('#pairSel').onchange = async e => {
+  if(!e.target.value) return;
+  $('#pairMsg').textContent = 'Opening…';
+  const res = await fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:e.target.value})});
+  const r = await res.json();
+  if(!res.ok){ $('#pairMsg').textContent = r.error || 'Could not open that folder'; return; }
+  usePair(r);
+};
+$('#pairPick').onclick = () => $('#pairDir').click();
+$('#pairDir').onchange = () => {
+  const files = [...$('#pairDir').files].filter(f => /\.(mp4|avi|mov|mkv|m4v|webm|mpg|mpeg|ts)$/i.test(f.name));
+  if(files.length !== 2){ $('#pairMsg').textContent = `Pick a folder with exactly two videos (wide and zoomed); it has ${files.length}.`; return; }
+  const fd = new FormData(); files.forEach(f => fd.append('videos', f, f.webkitRelativePath || f.name));
+  const xhr = new XMLHttpRequest(); xhr.open('POST','/api/upload_pair');
+  xhr.upload.onprogress = e => { if(e.lengthComputable) $('#pairMsg').textContent = `Uploading both clips… ${Math.round(e.loaded/e.total*100)}%`; };
+  xhr.onload = () => { const r = JSON.parse(xhr.responseText || '{}');
+    if(xhr.status !== 200){ $('#pairMsg').textContent = r.error || 'Upload failed'; return; } usePair(r); };
+  xhr.send(fd);
+  $('#pairDir').value = '';
+};
+
 /* ---------------- plate camera ---------------- */
 $('#plateUp').onclick = () => $('#plateFile').click();
 $('#plateFile').onchange = () => $('#plateFile').files[0] && upload($('#plateFile').files[0], true);
@@ -365,8 +477,7 @@ async function updateSync(){
   if(plate.video_id === video.video_id){ $('#syncTxt').textContent='Pick a different video for the plate camera'; $('#syncRow').style.display='flex'; return; }
   const r = await (await fetch(`/api/sync?video_id=${video.video_id}&plate_id=${plate.video_id}`)).json();
   $('#syncTxt').innerHTML = r.live ? 'Live cameras are synced by arrival time'
-    : 'Clips are synced from the traffic in both cameras when analysis starts'
-      + (r.auto ? ` <span style="opacity:.7">(file names say ${r.offset>=0?'+':''}${r.offset}s)</span>` : '');
+    : 'Clips are synced when analysis starts: v2 reads the clock burned into both pictures, then matches the traffic';
   $('#syncRow').style.display='flex';
 }
 
@@ -415,7 +526,7 @@ $('#start').onclick = async () => {
   if(ovMode==='file' && video.live){ toast('Pick an uploaded video for the overview'); return; }
   if(plMode==='live' && !(plate && plate.live)){ toast('Connect the plate RTSP camera, or switch it to video upload'); return; }
   if(plMode==='file' && plate && plate.live) plate = null;
-  const body = { video_id: video.video_id, zone: zone.length>=3 ? zone : null,
+  const body = { version: sysVersion, video_id: video.video_id, zone: zone.length>=3 ? zone : null,
     plate_video_id: plate ? plate.video_id : null, plate_adjust: parseFloat(S('#plateAdj'))||0,
     settings: { model:S('#s_model'), stride:S('#s_stride'), conf:S('#s_conf'), sensitivity:S('#s_sens'),
                 persist:S('#s_persist'), lookback:S('#s_look'), fragment:S('#s_frag'), pre_roll:S('#s_pre'), post_roll:S('#s_post'),
@@ -434,6 +545,109 @@ function openJob(id, live){
   if(live){ liveT = setInterval(()=>{ const im=$('#live'); const n=new Image(); n.onload=()=>{im.src=n.src; im.style.display='block'; $('#livePh').style.display='none';}; n.src=`/api/job/${jobId}/preview.jpg?t=${Date.now()}`; }, 350); }
   $('#dlCsv').href = `/api/job/${id}/events.csv`; $('#dlZip').href = `/api/job/${id}/report.zip`;
   $('#dlCsv').style.display = $('#dlZip').style.display = 'inline-block';
+  $('#dlLog').href = `/files/${id}/log.txt`; $('#dlLog').style.display = 'inline-block';
+  logLines = []; logNext = 0; $('#logbox').innerHTML = ''; mlogSig = '';
+}
+
+/* system version to run, remembered */
+let sysVersion = 'v2';
+try { const v = localStorage.getItem('ww:version'); if(v==='v1'||v==='v2') sysVersion = v; } catch(e) {}
+function showVersion(){ document.querySelectorAll('#verSel button').forEach(b => b.classList.toggle('on', b.dataset.v===sysVersion));
+  $('#start').textContent = `▶ Start analysis (${sysVersion})`; }
+document.querySelectorAll('#verSel button').forEach(b => b.onclick = () => {
+  sysVersion = b.dataset.v; try { localStorage.setItem('ww:version', sysVersion); } catch(e) {} showVersion(); });
+showVersion();
+
+/* activity log */
+let logLines = [], logNext = 0, logFilter = 'all';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const logShown = l => logFilter==='all' || (logFilter==='match' ? (l.kind==='match'||l.kind==='plate'||l.kind==='sync') : l.kind===logFilter);
+const logHtml = l => `<div class="ln"><span class="t">${l.t}</span><span class="k ${l.kind}">${l.kind}</span>${esc(l.msg)}</div>`;
+async function pollLog(){
+  if(!jobId) return;
+  const id = jobId;
+  const res = await fetch(`/api/job/${id}/log?since=${logNext}`); if(!res.ok || id!==jobId) return;
+  const r = await res.json();
+  if(!r.lines.length) return;
+  const box = $('#logbox');
+  const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  if(!logLines.length) box.innerHTML = '';
+  logLines.push(...r.lines); logNext = r.next;
+  box.insertAdjacentHTML('beforeend', r.lines.filter(logShown).map(logHtml).join(''));
+  if(atEnd) box.scrollTop = box.scrollHeight;
+}
+document.querySelectorAll('#logFilter button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#logFilter button').forEach(x => x.classList.toggle('on', x===b));
+  logFilter = b.dataset.f;
+  const box = $('#logbox'); box.innerHTML = logLines.filter(logShown).map(logHtml).join('') || '<div class="empty" style="padding:20px">Nothing yet.</div>';
+  box.scrollTop = box.scrollHeight;
+});
+
+/* a plate with its unclear characters marked; hover shows the possible values */
+function plateMarked(display, chars){
+  if(!display) return '';
+  if(!chars || !chars.length) return esc(display);
+  let k = 0;
+  return [...display].map(ch => {
+    if(ch===' ') return ' ';
+    const c = chars[k++];
+    if(!c || c.p >= 0.7) return esc(ch);
+    const alts = (c.alt||[]).map(a => `${a[0]} ${Math.round(a[1]*100)}%`).join(', ');
+    return `<span class="uc" title="Unclear: ${esc(alts)}">${esc(ch)}</span>`;
+  }).join('');
+}
+
+/* match log: one row per throw */
+let mlogSig = '';
+function renderMatchLog(evs){
+  const rows = [...evs].sort((a,b)=>a.id-b.id);
+  const sig = rows.map(e=>`${e.id}-${e.plate_text||''}-${e.plate_guess||''}-${e.plate_status||''}-${(e.platecam||{}).status||''}-${(e.files||{}).pc_scene||''}-${(e.files||{}).scene||''}`).join('|');
+  if(sig===mlogSig) return; mlogSig = sig;
+  const body = $('#mlogBody');
+  if(!rows.length){ body.innerHTML = '<tr><td colspan="5" class="empty">Rows appear here as each throw is matched to the plate camera.</td></tr>'; return; }
+  body.innerHTML = rows.map(e=>{
+    const base = `/files/${jobId}/${e.dir}/`, f = e.files||{}, pc = e.platecam||{};
+    const throwImg = f.scene || f.vehicle;
+    const pcStatus = {waiting:'matching in the plate camera…', searching:'matching in the plate camera…', no_frames:'no plate camera footage at that time', no_vehicle:'no vehicle in the plate camera at that time',
+                      skipped:'not a vehicle', error:'plate camera error'}[pc.status] || (e.platecam ? '' : 'single camera');
+    let ocr;
+    if(e.plate_text) ocr = `<div class="ocr">${plateMarked(e.plate_text, e.plate_chars)}</div><div class="sub">confirmed${e.plate_from==='plate_cam'?' · plate camera':' · overview'}</div>`;
+    else if(e.plate_guess) ocr = `<div class="ocr">${plateMarked(e.plate_guess, e.plate_chars)}</div>
+        <div class="sub">${e.plate_unclear?'partly read — highlighted characters are the most likely values, not certain':'every character read, but not confirmed (too few clear frames, or the two readers disagree) — check the plate'}</div>
+        ${e.plate_unclear?`<div class="sub" style="color:var(--warn)">unclear ${esc(e.plate_unclear)}</div>`:''}`;
+    else ocr = `<div class="na">${e.plate_status==='pending'?'reading…':'not readable'}</div>`;
+    if(e.plate_votes) ocr += `<div class="sub">${esc(e.plate_votes)}</div>`;
+    if(pc.ambiguous) ocr += `<div class="sub" style="color:var(--warn)">⚠ a similar vehicle passed at the same time</div>`;
+    return `<tr>
+      <td class="tm">${esc(e.clock || e.time_str)}<div class="sub">event ${e.id}${e.clock?` · clip ${esc(e.time_str)}`:''}</div>
+        ${pc.frame_clock||pc.frame_time?`<div class="sub">plate cam ${esc(pc.frame_clock||pc.frame_time)}</div>`:''}</td>
+      <td>${throwImg?`<img src="${base}${throwImg}" data-full="${base}${f.gif||throwImg}">`:'<span class="na">–</span>'}
+        <div class="sub">${esc(e.vehicle_class||e.culprit_type||'')}${e.track_id!=null?' #'+e.track_id:''}${f.gif?' · click for the throw clip':''}</div></td>
+      <td>${f.pc_scene?`<img src="${base}${f.pc_scene}">`:`<span class="na">${pcStatus||'–'}</span>`}
+        ${pc.status==='matched'?`<div class="sub">${esc(pc.vehicle_class||'')} · seen ${esc(pc.seen_from)} → ${esc(pc.seen_to)}</div>`:''}</td>
+      <td>${f.plate?`<img class="pl" src="${base}${f.plate}">`:'<span class="na">–</span>'}</td>
+      <td>${ocr}</td></tr>`;
+  }).join('');
+}
+
+function traceHtml(tr){
+  if(!tr) return '';
+  const rows = (tr.candidates||[]).map(c => `<tr class="${c.chosen?'chosen':''}"><td>${c.chosen?'✔':''} ${c.rank}</td><td>${esc(c.class)}</td><td>${esc(c.seen)}</td>
+      <td>${c.type_ok?'same':'<b style="color:var(--warn)">different</b>'}</td><td>${c.appearance.toFixed(2)}</td><td>${c.time_gap.toFixed(1)} s</td>
+      <td><b>${c.score.toFixed(2)}</b></td><td>${esc(c.plate||'–')}</td></tr>`).join('');
+  const nr = tr.new_reader, sr = tr.second_reader;
+  return `<details class="trace"><summary>How this plate was found</summary>
+    <div class="kv">
+      <span>Culprit in overview</span><b>${esc(tr.culprit_class)} · ${esc(tr.expected)}</b>
+      <span>Plate camera searched</span><b>${esc(tr.window)}</b>
+    </div>
+    ${rows?`<div class="tbl"><table><tr><th></th><th>Vehicle</th><th>Seen in plate cam</th><th>Type</th><th>Colour match</th><th>Time gap</th><th>Score</th><th>Plate</th></tr>${rows}</table></div>
+      <div class="sub" style="font-size:11.5px;color:var(--muted)">picked out of ${tr.vehicles_considered||rows.length} vehicle(s) that passed the plate camera at that time</div>`:''}
+    <div class="kv">
+      ${nr?`<span>Plate reader</span><b>${esc(nr.plate||'no number')} · ${esc(nr.status||'')} · ${nr.reads_agree||0} of ${nr.reads||0} reads agree · ${nr.frames_fused||0} frames fused</b>`:''}
+      ${tr.candidates&&tr.candidates.length?`<span>Second reader</span><b>${sr?esc(sr.plate)+' · '+esc(sr.votes):'no confident read'}</b>`:''}
+      <span>Decision</span><b>${esc(tr.decision)}</b>
+    </div></details>`;
 }
 
 let renderedVersions = {};
@@ -441,13 +655,15 @@ async function poll(){
   const res = await fetch('/api/job/'+jobId); if(!res.ok) return;
   const j = await res.json();
   const st = j.status;
-  $('#badge').className = 'badge '+st; $('#badgeTxt').textContent = {queued:'Queued',syncing:'Syncing cameras',running:'Analysing',done:'Completed',error:'Error',stopped:'Stopped'}[st]||st;
+  $('#badge').className = 'badge '+st; $('#badgeTxt').textContent = {queued:'Queued',syncing:'Syncing cameras',running:'Analysing',done:'Completed',error:'Error',stopped:'Stopped',interrupted:'Interrupted'}[st]||st;
   const pct = j.total ? Math.min(100, j.progress/j.total*100) : (st==='done'?100:0);
   $('#barFill').style.width = pct+'%';
-  $('#stFrames').textContent = `${j.progress||0} / ${j.total||0}`; $('#stFps').textContent = j.fps||0; $('#stVideo').textContent = (j.video_name||'–') + (j.plate_video_name ? `  +  plate cam (${j.live?'live':j.plate_sync?`${j.plate_offset>=0?'+':''}${j.plate_offset}s, ${j.plate_sync.method}`:'syncing…'})` : '');
+  $('#stFrames').textContent = `${j.progress||0} / ${j.total||0}`; $('#stFps').textContent = j.fps||0; $('#stVideo').textContent = `${(j.version||'v2').toUpperCase()} · ` + (j.video_name||'–') + (j.plate_video_name ? `  +  plate cam (${j.live?'live':j.plate_sync?`${j.plate_offset>=0?'+':''}${j.plate_offset}s, ${j.plate_sync.method}`:'syncing…'})` : '');
   const running = st==='running'||st==='queued'||st==='syncing';
   $('#start').disabled = running || !video; $('#stop').style.display = running ? 'inline-block':'none';
   renderEvents(j.events||[]);
+  renderMatchLog(j.events||[]);
+  pollLog();
   if(!running){
     clearInterval(pollT); clearInterval(liveT);
     if(st==='error') toast('Error: '+j.error, 6000);
@@ -468,7 +684,7 @@ function renderEvents(evs){
   $('#kPlate').textContent = Object.keys(plateCounts).length;
   evs.forEach(e=>{
     const pc = e.platecam || null;
-    const ver = `${e.gif_ready}-${e.snapshot_version||0}-${e.plate_text||''}-${e.plate_status||''}-${e.plate_from||''}-${e.hidden?1:0}-${pc?pc.status:''}`;
+    const ver = `${e.gif_ready}-${e.snapshot_version||0}-${e.plate_text||''}-${e.plate_guess||''}-${e.plate_status||''}-${e.plate_from||''}-${e.hidden?1:0}-${pc?pc.status:''}-${pc&&pc.trace?pc.trace.decision:''}`;
     if(renderedVersions[e.id]===ver) return;
     renderedVersions[e.id]=ver;
     const base = `/files/${jobId}/${e.dir}/`, f = e.files||{}, v = e.snapshot_version||0;
@@ -477,13 +693,16 @@ function renderEvents(evs){
     const repeats = e.plate_norm && plateCounts[e.plate_norm] > 1 ? plateCounts[e.plate_norm] : 0;
     const plateHtml = e.plate_text
       ? `<div class="plate" title="Confidence ${Math.round((e.plate_conf||0)*100)}%">${e.plate_text}</div>${repeats?`<div class="plate-miss">Same plate on ${repeats} events</div>`:''}`
+      : e.plate_status==='uncertain' && e.plate_guess
+      ? `<div class="plate" style="font-size:20px">${plateMarked(e.plate_guess, e.plate_chars)}</div>
+         <div class="plate-miss">${e.plate_unclear?`Partly read — the highlighted characters are the most likely values, check the plate photo<br>Unclear ${esc(e.plate_unclear)}`:'Every character read, but not confirmed (too few clear frames, or the two readers disagree) — check the plate photo'}</div>`
       : `<div class="plate-miss">${e.plate_status==='unavailable'?'Plate reader unavailable':e.plate_status==='pending'?'Reading plate…':(f.plate?'Plate captured — number not read confidently':'Plate not readable')}</div>`;
-    const pcMsg = {searching:'Plate camera: searching…', no_frames:'Plate camera: no footage for this time — check sync',
+    const pcMsg = {waiting:'Plate camera: matching…', searching:'Plate camera: matching…', no_frames:'Plate camera: no footage for this time — check sync',
                    no_vehicle:'Plate camera: no vehicle found in that window', error:'Plate camera error: '+(pc&&pc.error||''),
                    skipped:'Plate camera: skipped (culprit is not a vehicle)'};
     let srcHtml = '';
     if(e.plate_text && e.plate_from==='plate_cam')
-      srcHtml = `<div class="src">from <b>plate camera</b>${e.plate_votes?` · ${e.plate_votes} frames agree`:''}${e.plate_overview?` · overview read ${e.plate_overview}`:''}</div>`;
+      srcHtml = `<div class="src">from <b>plate camera</b>${e.plate_votes?` · ${e.plate_votes}`:''}${e.plate_overview?` · overview read ${e.plate_overview}`:''}</div>`;
     else if(e.plate_text)
       srcHtml = `<div class="src">from overview camera</div>`;
     if(pc && pcMsg[pc.status]) srcHtml += `<div class="src">${pcMsg[pc.status]}</div>`;
@@ -505,6 +724,7 @@ function renderEvents(evs){
         </div>
         ${plateHtml}
         ${srcHtml}
+        ${pc ? traceHtml(pc.trace) : ''}
         <div class="thumbs">
           <div class="thumb"><span>Vehicle / person</span>${f.vehicle?`<img src="${base}${f.vehicle}?v=${v}">`:'<small style="color:var(--muted)">n/a</small>'}</div>
           <div class="thumb"><span>Waste</span>${f.waste?`<img src="${base}${f.waste}">`:''}</div>
@@ -528,7 +748,7 @@ function renderEvents(evs){
 /* lightbox */
 document.addEventListener('click', e=>{
   const t = e.target;
-  if(t.matches('.ev img')) openLb(t.dataset.full || t.src);
+  if(t.matches('.ev img, .mlog img')) openLb(t.dataset.full || t.src);
   else if(t.dataset && t.dataset.open) openLb(t.dataset.open);
 });
 function openLb(src){ $('#lbImg').src=src; $('#lb').classList.add('show'); }
@@ -537,12 +757,15 @@ $('#lb').onclick = ()=> $('#lb').classList.remove('show');
 /* history */
 async function loadHistory(){
   const list = await (await fetch('/api/jobs')).json();
+  const keep = $('#history').value;
   $('#history').innerHTML = '<option value="">Previous analyses…</option>' +
-    list.map(j=>`<option value="${j.id}">${j.id.slice(0,15).replace(/(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)/,'$1-$2-$3 $4:$5')} · ${j.video_name} · ${j.event_count} event(s) · ${j.status}</option>`).join('');
+    list.map(j=>`<option value="${j.id}">${j.id.slice(0,15).replace(/(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)/,'$1-$2-$3 $4:$5')} · ${(j.version||'v2').toUpperCase()} · ${j.video_name} · ${j.event_count} event(s) · ${j.status}</option>`).join('');
+  if(keep && [...$('#history').options].some(o => o.value === keep)) $('#history').value = keep;
 }
+$('#history').onfocus = () => { if(!$('#history')._busy){ $('#history')._busy = true; loadHistory().finally(()=>{ $('#history')._busy = false; }); } };
 $('#history').onchange = e => { if(e.target.value){ $('#live').style.display='none'; $('#livePh').style.display='block'; $('#livePh').textContent='Viewing saved analysis'; openJob(e.target.value,false);} };
 
-loadVideos(); loadHistory();
+loadVideos(); loadHistory(); loadPairFolders();
 </script>
 </body>
 </html>

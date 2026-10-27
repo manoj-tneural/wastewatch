@@ -11,6 +11,24 @@ flags every time someone on a bike or car throws waste. For each event you get:
 | `waste.jpg` | Close-up of the dropped waste |
 | `events.json` / `events.csv` | Timeline of all events |
 
+## Two versions: v1 and v2
+
+The dashboard runs either one (switch next to *Start analysis*), so the same clips can be
+compared. Both share the throw detection and the general fixes (faster track search,
+clean live view, camera-clock times, matching status).
+
+| | v1 (`v1/`) | v2 (`v2/`) |
+|---|---|---|
+| Plate camera | searched once per event, after it | read continuously; vehicles kept in memory |
+| Plate finding | classic (character strokes, colour, edges) | trained plate detector |
+| Plate reading | one OCR model, two frames must agree | multi-frame fusion, three OCR models, per-character vote; v1 reader as second opinion |
+| Plate colours | grey only | white, green (EV), yellow (taxi), black (rental) |
+| Partial plates | not shown | unclear characters with likely values |
+| Camera sync | traffic, file names as fallback | camera clocks, fine-tuned by traffic |
+| Overview plate reads | yes | no when a plate camera is connected (it always wins) |
+
+CLI: `python -m v1.detector …` or `python -m v2.detector …` (same options).
+
 ## Install & run
 
 ```bash
@@ -23,7 +41,7 @@ GPU: install the CUDA build of PyTorch and it is used automatically (CPU ≈ 5 f
 
 CLI (no dashboard):
 ```bash
-python detector.py video.mp4 --out outputs/test --zone "[[0.55,0.22],[0.78,0.22],[1,0.45],[1,1],[0.22,1]]"
+python -m v2.detector video.mp4 --out outputs/test --zone "[[0.55,0.22],[0.78,0.22],[1,0.45],[1,1],[0.22,1]]"
 ```
 
 ## How it works
@@ -45,16 +63,19 @@ The overview camera sees the throw. A second, zoomed **plate camera** on the exi
 reads the number. Nothing changes in how waste is detected; the plate camera only adds
 the plate.
 
-How it works (`plate_cam.py`):
-1. When an event is confirmed, the culprit's time at the spot and the time it left the
-   overview give a search window (1 s before → *Plate cam search after exit*, default 6 s, after).
-2. YOLO runs on the plate camera in that window and follows every vehicle.
-3. The culprit is the vehicle with the same **type** (two-wheeler vs car/bus/truck),
-   seen at the right **time**, with the closest **colour** to the overview snapshot
-   (rider's clothes count for two-wheelers).
-4. Its plate is read on **every frame** it is in view (sharpest, largest first). A number
-   is accepted only when **two or more frames agree**. A confident plate-camera read
-   replaces the overview read; the overview read is kept in the CSV for comparison.
+How it works (`v2/plate_cam.py`):
+1. The plate camera runs all the time in its own thread. Every vehicle that passes is
+   tracked on every frame; its sharpest plate crops and best photos are kept **in memory
+   only**, and it gets a quick read as it leaves the view. Live, vehicles are forgotten
+   after 90 s (*plate_retention_sec*); nothing is written to disk unless the vehicle is
+   matched to a littering event.
+2. When an event is confirmed, the culprit is picked from the vehicles that passed while
+   it was in the overview (± *Plate cam margin*, default 4 s): same **type** (two-wheeler
+   vs car/bus/truck), right **time**, closest **colour** to the overview snapshot (rider's
+   clothes count for two-wheelers).
+3. Its plate gets a thorough read (see *Plate reading*). The original reader also reads
+   the same frames as a second opinion. If the two disagree, the plate is reported as a
+   best guess, not as the number.
 
 Each event then also has:
 
@@ -70,10 +91,15 @@ means two similar vehicles passed together — check the photo before issuing a 
 
 ### Recorded clips (testing)
 1. Export **both channels for the same time period** from the NVR (locally, not through the mobile app).
-2. Upload the overview clip as usual, then pick/upload the plate clip under **Plate camera**.
-3. Sync is automatic: when the analysis starts, the traffic in both clips is matched
-   (status shows *Syncing cameras*). NVR export names are only a fallback — they can carry
-   the export time instead of the recording time. If you still see the wrong vehicle, use
+2. Put the two clips in one folder. Under **Pair folder**, pick it from *Sample pairs in
+   source/…* (folders inside `source/`, used in place) or click **Choose folder…** (uploads
+   both). The wide and zoomed clips are told apart by the NVR channel in the file name
+   (`WW_WIDE_CHANNEL`, default `004`, is the wide camera); **⇄ Swap** fixes it if needed.
+   You can still upload the overview clip and pick the plate clip separately.
+3. Sync is automatic: when the analysis starts, the clock burned into each camera's
+   picture is read (to the frame, from when the seconds digit changes), then fine-tuned by
+   matching the traffic in both clips (status shows *Syncing cameras*). NVR export names
+   are only a last resort — they can carry the export time instead of the recording time. If you still see the wrong vehicle, use
    **Adjust** (seconds; + means the plate clip started later).
 
 ### False-alert protection
@@ -86,15 +112,28 @@ means two similar vehicles passed together — check the photo before issuing a 
   dismissed as waving grass.
 
 ### Plate reading
-- Plates are found by their character strokes (works for white, yellow, shaded or grey plates).
-- The state code must be a real one; a single OCR look-alike (KE → KL) is corrected.
-- The plate camera reads up to 40 frames of the matched vehicle. A number is accepted when
-  two frames read it exactly, or one sure read is backed by near-identical reads
-  (shown as e.g. `1 exact + 4 near of 40`).
+- A trained plate detector (YOLOv9, `open-image-models`) finds the plate on each vehicle
+  view. The camera's own text overlays are masked so they are never read as a plate.
+- The plate crops of one vehicle (up to 12) are aligned and median-stacked. A plate is
+  sharp on only a few frames; the stacked image is clearer than any single frame.
+- Two-line plates (usual on two-wheelers) are split and each line is read.
+- Three OCR models read the stacked plate, a straightened copy, and slightly varied
+  versions of both. The reads are voted **character by character** inside the Indian
+  plate patterns (standard and BH series); the state code must be a real one and the
+  district cannot be 0.
+- A plate is reported as the number (`ok`) only when every character has a clear majority
+  and the reads agree on its length. Otherwise it is a **best guess** (`uncertain`),
+  shown with a warning and kept in its own CSV column, for a person to check against the
+  plate photo.
+- Partial reads show which characters are clear. An unclear character is shown as its
+  most likely value (highlighted), with the other possible values and their share of the
+  reads, e.g. `10th: 6 (55%) or 0 (43%)`. Only values that fit the slot are offered: a
+  digit position gives digits, a letter position letters.
+- The v1 single-frame reader (`v2/plates_legacy.py`) is kept as a second opinion.
 
 CLI:
 ```bash
-python detector.py overview.mp4 --plate plate.mp4 --out outputs/test --zone "[[...]]"
+python -m v2.detector overview.mp4 --plate plate.mp4 --out outputs/test --zone "[[...]]"
 # --plate-offset 5.0   override the automatic sync
 # --plate-adjust -0.4  fine-tune it
 ```
@@ -104,7 +143,7 @@ Add both cameras under **Add a live camera (RTSP)**, pick the overview in step 1
 plate camera under *Plate camera*. Frames are time-stamped on arrival, so both cameras
 must reach this PC over the LAN.
 ```bash
-python detector.py "rtsp://user:pass@192.168.1.64:554/stream1" --plate "rtsp://user:pass@192.168.1.65:554/stream1"
+python -m v2.detector "rtsp://user:pass@192.168.1.64:554/stream1" --plate "rtsp://user:pass@192.168.1.65:554/stream1"
 ```
 VIGI cameras: main stream is usually `rtsp://user:pass@IP:554/stream1`. Live mode must keep
 up with the camera. *Live processing fps* (default 10) sets how many overview frames per second

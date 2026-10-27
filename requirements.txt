@@ -5,3 +5,5 @@ pillow>=10.0
 numpy
 lap>=0.5.12
 fast-plate-ocr[onnx]>=1.1
+open-image-models>=0.6
+rapidocr_onnxruntime>=1.4

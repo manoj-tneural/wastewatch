@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import collections
 import json
+import math
 import os
 import threading
 import time
@@ -37,8 +38,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from plate_cam import LiveReader, PlateCamMatcher, is_stream, open_plate_source, resolve_offset
-from plates import PlateReader, display_plate
+from .plate_cam import LiveReader, PlateCamMatcher, is_stream, open_plate_source, osd_start, resolve_offset
+from .plates import PlateReader, display_plate
 
 PERSON = 0
 VEHICLES = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
@@ -94,7 +95,7 @@ def _iou(a, b):
 def _point_box_dist(px, py, b):
     dx = max(b[0] - px, 0, px - b[2])
     dy = max(b[1] - py, 0, py - b[3])
-    return float(np.hypot(dx, dy))
+    return math.hypot(dx, dy)
 
 
 def _union(a, b):
@@ -183,6 +184,18 @@ class Track:
     def is_vehicle(self):
         return self.cls in VEHICLES
 
+    def window(self, lo, hi):
+        """History entries with lo <= frame <= hi, oldest first. Walks back from the newest
+        entry and stops at lo, instead of scanning the whole history."""
+        out = []
+        for item in reversed(self.history):
+            if item[0] < lo:
+                break
+            if item[0] <= hi:
+                out.append(item)
+        out.reverse()
+        return out
+
     def box_at(self, idx, tol=3):
         best = None
         for f, b, _ in reversed(self.history):
@@ -242,6 +255,7 @@ class WasteDetector:
         self.platecam = None                                  # PlateCamMatcher
         self._pc_pool = None
         self._json_lock = threading.Lock()
+        self.clock0 = None                                    # clips: time of day of the first frame (camera clock)
 
     # ------------------------------------------------------------------ setup
     def _setup(self, w, h, fps):
@@ -726,9 +740,7 @@ class WasteDetector:
         need = max(3, int(0.25 * self.fps))
         for t in self.tracks.values():
             beside = leaving = 0
-            for f, b, _ in t.history:
-                if f < lo or f > hi:
-                    continue
+            for f, b, _ in t.window(lo, hi):
                 bw, bh = max(b[2] - b[0], 1.0), max(b[3] - b[1], 1.0)
                 if (b[0] - 0.45 * bw) <= sx <= (b[2] + 0.45 * bw) and (b[1] - 0.35 * bh) <= sy <= (b[3] + 0.55 * bh):
                     beside += 1
@@ -890,9 +902,7 @@ class WasteDetector:
         ranked = []
         for t in self.tracks.values():
             best = None
-            for f, b, _ in t.history:
-                if f < lo or f > hi:
-                    continue
+            for f, b, _ in t.window(lo, hi):
                 diag = np.hypot(b[2] - b[0], b[3] - b[1])
                 bh = max(b[3] - b[1], 1)
                 for wx, wy in spots:
@@ -938,7 +948,7 @@ class WasteDetector:
         return {"track": t, "frame": f, "box": b, "score": score}
 
     def _track_moved(self, track, lo, hi, min_frac=0.04):
-        boxes = [b for f, b, _ in track.history if lo <= f <= hi]
+        boxes = [b for f, b, _ in track.window(lo, hi)]
         if len(boxes) < 2:
             return False
         a, z = boxes[0], boxes[-1]
@@ -995,11 +1005,13 @@ class WasteDetector:
             "id": ev_no, "dir": os.path.basename(ev_dir),
             "detected_frame": idx, "waste_frame": appeared,
             "time": round(appeared / self.fps, 2), "time_str": self._tstr(appeared),
+            "clock": self._clock(self._T(appeared)),
             "waste_box": [round(v, 1) for v in wbox_full],
             "culprit_type": "unknown", "track_id": None, "vehicle_class": None,
             "plate_text": None, "plate_norm": None, "plate_conf": None, "plate_status": "pending",
             "hidden": bool(hidden),
             "files": {}, "gif_ready": False,
+            "platecam": {"status": "waiting"} if self.cfg.plate_source else None,
         }
         # Prefer the last frame the bag was actually visible. Once bushes cover it,
         # the live frame no longer shows the waste.
@@ -1025,7 +1037,8 @@ class WasteDetector:
             ev.update(track_id=t.tid, vehicle_class=CLASS_NAMES.get(t.cls, "object"),
                       culprit_type="vehicle" if t.is_vehicle else ("rider" if t.rider else "pedestrian"),
                       culprit_frame=culprit["frame"],
-                      culprit_time_str=self._tstr(culprit["frame"]))
+                      culprit_time_str=self._tstr(culprit["frame"]),
+                      culprit_clock=self._clock(self._T(culprit["frame"])))
             self._write_snapshot(ev, t)
             self._maybe_plate(ev, t)
             # scene: the moment the culprit was closest to the waste spot
@@ -1209,6 +1222,15 @@ class WasteDetector:
         t = self._T(idx)
         return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int((t % 1) * 100):02d}"
 
+    def _clock(self, t):
+        """Time of day for a point on the shared timeline, or None when unknown."""
+        if self.live:
+            return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int((t % 1) * 10)}"
+        if self.clock0 is None:
+            return None
+        s = (self.clock0 + t) % 86400
+        return f"{int(s // 3600):02d}:{int(s % 3600 // 60):02d}:{s % 60:04.1f}"
+
     def _T(self, idx):
         """Time of overview frame `idx` on the shared timeline (clip seconds, or wall-clock when live)."""
         if not self.live:
@@ -1365,21 +1387,38 @@ class WasteDetector:
             os.replace(tmp, os.path.join(self.out_dir, "events.json"))
 
     # ------------------------------------------------------------------ preview
+    def _near_zone(self, box, margin=0.6):
+        """True when a box is in or beside the watched zone (or there is no zone)."""
+        if self.zone_full is None:
+            return True
+        bw = box[2] - box[0]
+        for px in (box[0] - margin * bw, (box[0] + box[2]) / 2, box[2] + margin * bw):
+            if cv2.pointPolygonTest(self.zone_full.astype(np.float32), (float(px), float(box[3])), True) > -0.3 * bw:
+                return True
+        return False
+
     def _draw_preview(self, frame, dets):
+        """Live view: the zone, the people and vehicles near it, the culprits and the waste.
+        Far-away traffic and the background model's candidate blobs are not drawn."""
         img = cv2.resize(frame, (int(self.W * self.ss), int(self.H * self.ss)))
         s = self.ss
         if self.zone_full is not None:
             cv2.polylines(img, [(self.zone_full * s).astype(np.int32)], True, COLORS["zone"], 2)
+        # culprits and waste stay on screen for a few seconds after a throw, then go
+        recent = int(5 * self.fps)
+        idx = getattr(self, "_idx", 0)
+        culprits = {ev.get("track_id") for ev in self.events if idx - ev["detected_frame"] <= recent}
         for d in dets:
             b = d.get("ebox", d["box"])
-            col = COLORS["vehicle"] if d["cls"] in VEHICLES else COLORS["person"]
-            cv2.rectangle(img, (int(b[0] * s), int(b[1] * s)), (int(b[2] * s), int(b[3] * s)), col, 2)
-            self._label(img, f"{CLASS_NAMES[d['cls']]} #{d['tid']}", (int(b[0] * s), int(b[1] * s)), col)
+            is_culprit = d["tid"] in culprits
+            if not is_culprit and (d["cls"] not in VEHICLES or self.zone_full is None or not self._near_zone(b)):
+                continue                       # no people, no traffic away from the litter zone
+            col = COLORS["culprit"] if is_culprit else COLORS["vehicle"]
+            cv2.rectangle(img, (int(b[0] * s), int(b[1] * s)), (int(b[2] * s), int(b[3] * s)), col, 3 if is_culprit else 1)
+            if is_culprit:
+                self._label(img, f"CULPRIT {CLASS_NAMES[d['cls']]} #{d['tid']}", (int(b[0] * s), int(b[1] * s)), col)
         k = s / self.ps
-        for cd in self.cands:
-            b = cd.box
-            cv2.rectangle(img, (int(b[0] * k), int(b[1] * k)), (int(b[2] * k), int(b[3] * k)), COLORS["cand"], 1)
-        for b, _fr, _col in self.litter:
+        for b, _fr, _col in [x for x in self.litter if idx - x[1] <= recent]:
             cv2.rectangle(img, (int(b[0] * k) - 4, int(b[1] * k) - 4), (int(b[2] * k) + 4, int(b[3] * k) + 4), (0, 0, 255), 2)
             self._label(img, "LITTER", (int(b[0] * k) - 4, int(b[1] * k) - 4), (0, 0, 200))
         return img
@@ -1430,6 +1469,13 @@ class WasteDetector:
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
         self._setup(w, h, fps)
+        if not self.live:
+            try:
+                self.clock0 = osd_start(video_path)
+            except Exception as e:  # noqa: BLE001 - clock times are a convenience
+                self.log(f"could not read the camera clock: {e}")
+            if self.clock0 is not None:
+                self.log(f"overview clip starts at {self._clock(0.0)} (camera clock)")
         self.stamps = collections.deque(maxlen=int(fps * 180))
         try:
             self._open_platecam()
@@ -1478,6 +1524,7 @@ class WasteDetector:
                         self.on_event(ev)
             self._flush_gifs(idx)
             if idx % 3 == 0:
+                self._idx = idx
                 self.preview = _jpeg(self._draw_preview(frame, dets), 75)
             idx += 1
             if progress:
