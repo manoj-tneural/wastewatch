@@ -39,7 +39,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from .plate_cam import LiveReader, PlateLogger, is_stream, open_plate_source, osd_start, resolve_offset
+from .plate_cam import Calibration, LiveReader, PlateLogger, is_stream, open_plate_source, osd_start, resolve_offset
 from .plates import PlateReader, display_plate
 
 PERSON = 0
@@ -81,7 +81,12 @@ class Config:
     plate_lookback_max_sec: float = 30.0  # search back to when the culprit entered the overview, at most this long
     plate_imgsz: int = 960             # plate camera vehicle detection size (vehicles are large in a zoomed view)
     plate_rate: float = 0.0            # plate camera frames per second analysed (0 = every frame)
+    plate_order_match: bool = True     # match by vehicle order + lane + learned timing (False: best single match)
+    plate_verge_side: str = "same"     # where the verge is in the plate view: same as overview / left / right / opposite
     plate_retention_sec: float = 90.0  # live: how long passing vehicles are remembered (memory only)
+    # Bag pushed out of a car window (Manoj's detector, daylight). Off: on the sample footage
+    # it fired 8 times, all on the green median behind cars in the far lanes, and caught no throw.
+    car_window: bool = False
     live_fps: float = 10.0             # live only: frames per second to process (0 = every camera frame)
 
 
@@ -244,6 +249,7 @@ class WasteDetector:
         self.cands: list[Candidate] = []
         self._rider_arm: dict[int, list] = {}
         self._rider_done: set[int] = set()
+        self._car_win: dict[int, dict] = {}
         self.events: list[dict] = []
         self.pending_gifs: list[dict] = []
         self.litter: list[tuple] = []          # (box, frame, mean hsv) confirmed waste, proc coords
@@ -792,6 +798,92 @@ class WasteDetector:
         col = float(nearer.min()) if len(nearer) else float(cols.min())
         return max(0.0, col - edge) / max(self.ps, 1e-6)
 
+    def _watch_car_window(self, dets, idx):
+        """A bag pushed out of a car window toward the verge, then let go.
+
+        The bag stays inside the car until the arm reaches past the door, so the
+        verge never sees it land. The reach past the door is the throw.
+        """
+        confirmed = []
+        hsv = None
+        for d in dets:
+            if d.get("cls") != 2 or d.get("tid", -1) < 0:
+                continue
+            tid = d["tid"]
+            if tid in self._rider_done:
+                continue
+            box = d["box"]
+            bw, bh = box[2] - box[0], box[3] - box[1]
+            # A window is only readable on a car this close. A distant van beside the hedge is not.
+            if bw < 160 or bh < 120 or box[0] < 4 or box[2] > self.W - 4 or box[1] < 4:
+                continue
+            side = self._zone_side(box)
+            if self._gap_to_zone(box, side) > 1.6 * bw:
+                continue
+            # The open window, just outside the door. The arm in this view sits high
+            # on the door and is only a few frames wide, so the strip has to cover it.
+            if side < 0:
+                rx1, rx2 = box[0] - 0.22 * bw, box[0]
+            else:
+                rx1, rx2 = box[2], box[2] + 0.22 * bw
+            ry1, ry2 = box[1], box[1] + 0.50 * bh
+            ix1, iy1 = int(max(0, rx1)), int(max(0, ry1))
+            ix2, iy2 = int(min(self.W - 1, rx2)), int(min(self.H - 1, ry2))
+            st = self._car_win.setdefault(tid, {"n": 0, "blob": None, "last": -1, "first": idx, "car": list(box)})
+            blob = None
+            if ix2 - ix1 >= 8 and iy2 - iy1 >= 8:
+                if hsv is None:
+                    hsv = cv2.cvtColor(self._frame, cv2.COLOR_BGR2HSV)
+                sub = hsv[iy1:iy2, ix1:ix2]
+                mask = ((sub[:, :, 0] >= 35) & (sub[:, :, 0] <= 95) & (sub[:, :, 1] >= 70) & (sub[:, :, 2] >= 50)).astype(np.uint8) * 255
+                n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+                best = None
+                for k in range(1, n):
+                    x, y, w, h, a = stats[k]
+                    if a < 40 or a > 600 or w > 0.22 * bw or h < 8 or h > 0.40 * bh:
+                        continue
+                    if best is None or a > best[0]:
+                        best = (int(a), int(x), int(y), int(w), int(h))
+                if best:
+                    _a, x, y, w, h = best
+                    # The arm has to come out of the door. A bush with a gap in front of it does not.
+                    if side < 0:
+                        touches = (ix1 + x + w) >= box[0] - 0.12 * bw
+                    else:
+                        touches = (ix1 + x) <= box[2] + 0.12 * bw
+                    if touches:
+                        blob = (ix1 + x, iy1 + y, ix1 + x + w, iy1 + y + h)
+            if blob is not None:
+                if st["n"] == 0:
+                    st["first"] = idx
+                st["n"] += 1
+                st["blob"] = blob
+                st["last"] = idx
+                st["car"] = list(box)
+                continue
+            if st["n"] < 2 or st["last"] < 0 or idx - st["last"] < max(3, int(0.2 * self.fps)):
+                continue
+            # A verge the car drives along stays green the whole way. The arm is out for a moment.
+            if st["last"] - st["first"] > int(0.40 * self.fps):
+                st["n"] = 0
+                continue
+            t = self.tracks.get(tid)
+            if t is None or not self._track_moved(t, max(0, idx - int(self.fps)), idx):
+                st["n"] = 0
+                continue
+            x1, y1, x2, y2 = st["blob"]
+            pb = [v * self.ps for v in (x1, y1, x2, y2)]
+            cd = Candidate(pb, (pb[0] + pb[2]) / 2, (pb[1] + pb[3]) / 2, st["last"])
+            cd.born = st["last"]
+            cd.last = st["last"]
+            cd.force_tid = tid
+            cd.force_box = st["car"]
+            cd.lost = False
+            self._rider_done.add(tid)
+            confirmed.append(cd)
+            self.log(f"[car] bag leaves the window of car #{tid} at {self._tstr(st['last'])}")
+        return confirmed
+
     def _watch_rider_throws(self, dets, idx):
         """A bag held out from a scooter toward the verge.
 
@@ -804,7 +896,7 @@ class WasteDetector:
         # Daylight asphalt is pale, so this night test would mark every scooter.
         # A coloured kit still on the rider is not litter either.
         if float(self._frame.mean()) > 100:
-            return []
+            return self._watch_car_window(dets, idx) if self.cfg.car_window else []
         confirmed = []
         hsv = None
         for d in dets:
@@ -1283,10 +1375,59 @@ class WasteDetector:
         tf = max(tf, tc - c.plate_lookback_max_sec)
         args = (track.best_crop, want_cls, tf - c.plate_before_sec, tl + c.plate_after_sec,
                 (tf, tl), os.path.join(self.out_dir, ev["dir"]))
+        kw = {"label": f"event {ev['id']}"}
+        if c.plate_order_match:
+            lo_f = max(track.first_seen if track.first_seen >= 0 else at_spot,
+                       at_spot - int(c.plate_lookback_max_sec * self.fps)) - int(c.plate_before_sec * self.fps)
+            hi_f = max(track.last_seen, at_spot) + int(c.plate_after_sec * self.fps)
+            kw["context"] = self._overview_context(track, want_cls, at_spot, lo_f, hi_f)
+            ref_box = track.box_at(at_spot, tol=8) or (track.history[-1][1] if track.history else [0, 0, 1, 1])
+            side = self._zone_side(ref_box)
+            kw["verge_side"] = {"left": -1, "right": 1, "opposite": -side}.get(c.plate_verge_side, side)
+            kw["calib"] = getattr(self, "_calib", None)
         ev["platecam"] = {"status": "searching"}
         self.log(f"[match] event {ev['id']}: asking the plate camera for the {CLASS_NAMES.get(want_cls, 'vehicle')} "
                  f"#{tid}")
-        return self._pc_pool.submit(self._pc_match, *args, label=f"event {ev['id']}")
+        return self._pc_pool.submit(self._pc_match, *args, **kw)
+
+    def _overview_context(self, culprit, want_cls, at_spot, lo_f, hi_f, limit=14):
+        """Every vehicle the overview saw in the search window, for order + lane matching.
+
+        For each: its type, when it passed the dumping spot (closest to the watched zone),
+        how far from the verge it was then (in vehicle widths), and its best snapshot.
+        """
+        rows = []
+        # reference row: the middle of the watched zone (or of the frame when there is none)
+        zf = getattr(self, "zone_full", None)
+        y_ref = float(zf[:, 1].mean()) if zf is not None else self.H * 0.6
+        for t in self.tracks.values():
+            is_culprit = t is culprit
+            if not (t.is_vehicle or is_culprit):
+                continue
+            hist = [(f, b) for f, b, _ in t.history if lo_f <= f <= hi_f]
+            if len(hist) < 3 and not is_culprit:
+                continue
+            # Every vehicle, the culprit included, is timed the same way: the moment the
+            # bottom of its box crosses the row of the dumping spot. Each vehicle crosses
+            # it once, whatever lane it is in. (The throw itself can be seconds later.)
+            best = None
+            for f, b in hist:
+                key = abs(b[3] - y_ref)
+                if best is None or key < best[0]:
+                    best = (key, f, b)
+            if best is not None:
+                pf, pb = best[1], best[2]
+            else:
+                pf, pb = at_spot, t.box_at(at_spot, tol=8)
+            if pb is None:
+                continue
+            bw = max(pb[2] - pb[0], 1.0)
+            gap = self._gap_to_zone(pb, self._zone_side(pb))
+            rows.append({"tid": t.tid, "cls": want_cls if is_culprit else t.cls, "t_pass": self._T(pf),
+                         "lane": float(min(gap, 1e6)) / bw, "jpeg": t.best_crop, "culprit": is_culprit})
+        tc = self._T(at_spot)
+        rows.sort(key=lambda r: (not r["culprit"], abs(r["t_pass"] - tc)))
+        return rows[:limit]
 
     def _apply_platecam(self, ev, res):
         if not res:
@@ -1295,7 +1436,7 @@ class WasteDetector:
             ev["plate_status"] = "unreadable"      # set again below when a number was read
         keep = ("status", "error", "frames", "vehicles_seen", "match_score", "appearance", "time_gap",
                 "type_ok", "ambiguous", "vehicle_class", "votes", "seen_from", "seen_to", "frame_time", "secs",
-                "plate_type", "trace")
+                "plate_type", "trace", "method", "overview_vehicles", "learned_delay", "delay_samples")
         ev["platecam"] = {k: res.get(k) for k in keep if res.get(k) is not None}
         if res.get("plate_type"):
             ev["plate_type"] = res["plate_type"]
@@ -1457,6 +1598,12 @@ class WasteDetector:
         self.platecam = PlateLogger(self.pc_src, c.model, c.conf, c.plate_imgsz, c.device, rate=c.plate_rate,
                                     retention_sec=c.plate_retention_sec, log=self.log).start()
         self._pc_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="platecam")
+        # learned travel time between the cameras, shared by all v2 jobs of this install
+        calib_path = os.path.join(os.path.dirname(os.path.abspath(self.out_dir)), "platecam_calib_v2.json")
+        self._calib = Calibration(calib_path, key="live" if self.pc_src.live else "clip", log=self.log)
+        dl = self._calib.delay()
+        self.log(f"plate camera: travel time {'learned ' + format(dl[0], '+.2f') + 's' if dl else 'not learned yet'}"
+                 f" ({self._calib.samples()} samples)")
         if self.pc_src.live:
             self.log(f"plate camera: live, reading every passing vehicle, "
                      f"remembered {c.plate_retention_sec:.0f}s in memory only")

@@ -630,6 +630,237 @@ def job_zip(jid):
                      download_name=f"waste_evidence_{jid}.zip")
 
 
+# ------------------------------------------------------------------ event log
+@app.get("/events")
+def events_page():
+    return render_template("events.html")
+
+
+def _event_when(job, ev):
+    """(sortable timestamp, date, time text) for an event.
+
+    Live: the event time is a clock time on the day the job ran. Clips: the job's
+    date and the position in the clip, because the clip's real recording time is
+    not reliably known.
+    """
+    started = job.get("started") or ""
+    day = started[:10] if started else job["id"][:8]
+    if job.get("live"):
+        t = (ev.get("time_str") or "")[:8]
+        stamp = f"{day} {t}"
+        return stamp, day, ev.get("time_str") or ""
+    stamp = f"{started or day} +{ev.get('time', 0):09.2f}"
+    if ev.get("clock"):               # camera clock read from the picture
+        return stamp, day, f"{ev['clock']} (clip {ev.get('time_str', '')})"
+    return stamp, day, f"clip {ev.get('time_str', '')}"
+
+
+def _all_events():
+    out = []
+    for jid in sorted(os.listdir(OUTPUTS), reverse=True):
+        if not os.path.isdir(os.path.join(OUTPUTS, jid)):
+            continue
+        j = get_job(jid)
+        if not j:
+            continue
+        for ev in j.get("events") or []:
+            stamp, day, when = _event_when(j, ev)
+            pc = ev.get("platecam") or {}
+            out.append({
+                "job": jid, "id": ev["id"], "dir": ev["dir"], "stamp": stamp, "date": day, "when": when,
+                "video": j.get("video_name"), "plate_video": j.get("plate_video_name"),
+                "live": bool(j.get("live")), "job_status": j.get("status"),
+                "culprit_type": ev.get("culprit_type"), "vehicle_class": ev.get("vehicle_class"),
+                "track_id": ev.get("track_id"), "plate_text": ev.get("plate_text"),
+                "plate_norm": ev.get("plate_norm"), "plate_conf": ev.get("plate_conf"),
+                "plate_from": ev.get("plate_from"), "plate_votes": ev.get("plate_votes"),
+                "plate_status": ev.get("plate_status"), "plate_overview": ev.get("plate_overview"),
+                "plate_guess": ev.get("plate_guess"), "plate_unclear": ev.get("plate_unclear"),
+                "plate_chars": ev.get("plate_chars"), "version": j.get("version") or "v2",
+                "ambiguous": bool(pc.get("ambiguous")), "match_method": pc.get("method"),
+                "platecam_status": pc.get("status"), "hidden": bool(ev.get("hidden")),
+                "files": ev.get("files") or {}, "gif_ready": bool(ev.get("gif_ready")),
+                "time_str": ev.get("time_str"), "culprit_time_str": ev.get("culprit_time_str"),
+                "gif_range": ev.get("gif_range"),
+            })
+    out.sort(key=lambda e: e["stamp"], reverse=True)
+    return out
+
+
+def _filter_events(evs, args):
+    q = (args.get("q") or "").strip().upper().replace(" ", "")
+    d_from, d_to = args.get("from") or "", args.get("to") or ""
+    kind = args.get("kind") or ""
+    vclass = args.get("vclass") or ""
+    res = []
+    for e in evs:
+        if q:
+            hay = " ".join(str(x or "") for x in (e["plate_norm"], e["plate_text"], e["video"], e["job"],
+                                                   e["vehicle_class"], e["plate_overview"],
+                                                   e["plate_guess"])).upper().replace(" ", "")
+            if q not in hay:
+                continue
+        if d_from and e["date"].replace("-", "") < d_from.replace("-", ""):
+            continue
+        if d_to and e["date"].replace("-", "") > d_to.replace("-", ""):
+            continue
+        if kind == "plate" and not e["plate_text"]:
+            continue
+        if kind == "noplate" and e["plate_text"]:
+            continue
+        if kind == "review" and not (e["ambiguous"] or not e["plate_text"]):
+            continue
+        if vclass and (e["vehicle_class"] or e["culprit_type"]) != vclass:
+            continue
+        res.append(e)
+    return res
+
+
+@app.get("/api/events")
+def api_events():
+    evs = _filter_events(_all_events(), request.args)
+    limit = min(int(request.args.get("limit", 500)), 5000)
+    plates = {}
+    for e in evs:
+        if e["plate_norm"]:
+            plates[e["plate_norm"]] = plates.get(e["plate_norm"], 0) + 1
+    return jsonify(events=evs[:limit], total=len(evs), repeat_plates=plates)
+
+
+def _event_record(jid, eid):
+    j = get_job(jid)
+    if not j:
+        return None, None
+    for ev in j.get("events") or []:
+        if int(ev["id"]) == int(eid):
+            return j, ev
+    return j, None
+
+
+def _event_summary(j, ev):
+    stamp, day, when = _event_when(j, ev)
+    pc = ev.get("platecam") or {}
+    lines = [
+        "WasteWatch - littering event evidence",
+        "",
+        f"Analysis        : {j['id']}  ({'live cameras' if j.get('live') else 'recorded clips'})",
+        f"Date            : {day}",
+        f"Waste at rest   : {when}",
+        f"Overview video  : {j.get('video_name') or ''}",
+        f"Plate camera    : {j.get('plate_video_name') or 'not used'}",
+        f"Culprit         : {ev.get('culprit_type')} {ev.get('vehicle_class') or ''} (track #{ev.get('track_id')})",
+        f"Culprit at spot : {ev.get('culprit_time_str') or ''}",
+        f"Number plate    : {ev.get('plate_text') or 'not read'}",
+        *([f"Best guess      : {ev['plate_guess']}  (not confirmed - check the plate photo)"] if ev.get("plate_guess") else []),
+        *([f"Unclear         : {ev['plate_unclear']}"] if ev.get("plate_unclear") else []),
+        f"Plate read from : {ev.get('plate_from') or ''}  {ev.get('plate_votes') or ''}",
+        f"Plate confidence: {ev.get('plate_conf') if ev.get('plate_conf') is not None else ''}",
+    ]
+    if ev.get("plate_overview"):
+        lines.append(f"Overview read   : {ev['plate_overview']}")
+    if pc:
+        lines.append(f"Plate cam match : {pc.get('status')}  method={pc.get('method') or ''}  "
+                     f"score={pc.get('match_score', '')}  {'AMBIGUOUS - check the photos' if pc.get('ambiguous') else ''}")
+    lines += ["", "Files:"]
+    names = {"gif": "action.gif - the throw, from before it happened to after",
+             "vehicle": "vehicle.jpg - best photo of the culprit (overview camera)",
+             "scene": "scene.jpg - full frame when the culprit was at the spot",
+             "waste": "waste.jpg - close-up of the waste",
+             "plate": "plate crop the number was read from",
+             "pc_scene": "plate_cam.jpg - plate camera frame, matched vehicle boxed",
+             "pc_vehicle": "plate_cam_vehicle.jpg - matched vehicle in the plate camera",
+             "pc_plate": "plate crop from the plate camera"}
+    seen = set()
+    for k, fn in (ev.get("files") or {}).items():
+        if fn in seen:
+            continue
+        seen.add(fn)
+        lines.append(f"  {fn:28s} {names.get(k, '').split(' - ', 1)[-1]}")
+    return "\n".join(lines) + "\n"
+
+
+def _add_event_to_zip(z, j, ev, prefix=""):
+    root = os.path.join(OUTPUTS, j["id"], ev["dir"])
+    if os.path.isdir(root):
+        for f in sorted(os.listdir(root)):
+            full = os.path.join(root, f)
+            if os.path.isfile(full):
+                z.write(full, prefix + f)
+    z.writestr(prefix + "event.json", json.dumps(ev, indent=2))
+    z.writestr(prefix + "summary.txt", _event_summary(j, ev))
+
+
+@app.get("/api/job/<jid>/event/<int:eid>/evidence.zip")
+def event_zip(jid, eid):
+    jid = secure_filename(jid)
+    j, ev = _event_record(jid, eid)
+    if not ev:
+        abort(404)
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as z:
+        _add_event_to_zip(z, j, ev)
+    mem.seek(0)
+    plate = (ev.get("plate_norm") or "noplate")
+    return send_file(mem, mimetype="application/zip", as_attachment=True,
+                     download_name=f"evidence_{jid}_event{int(eid):02d}_{plate}.zip")
+
+
+@app.post("/api/events/evidence.zip")
+def events_zip():
+    """Selected events in one ZIP: a folder per event, plus a CSV of all of them."""
+    items = (request.get_json(force=True) or {}).get("items") or []
+    if not items:
+        return jsonify(error="Select at least one event"), 400
+    mem = io.BytesIO()
+    rows = []
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as z:
+        for it in items[:500]:
+            jid = secure_filename(str(it.get("job", "")))
+            j, ev = _event_record(jid, it.get("id", -1))
+            if not ev:
+                continue
+            folder = f"{jid}_event{int(ev['id']):02d}_{ev.get('plate_norm') or 'noplate'}/"
+            _add_event_to_zip(z, j, ev, folder)
+            rows.append((j, ev))
+        z.writestr("events.csv", _log_csv(rows))
+    if not rows:
+        return jsonify(error="None of the selected events were found"), 404
+    mem.seek(0)
+    return send_file(mem, mimetype="application/zip", as_attachment=True,
+                     download_name=f"waste_evidence_{time.strftime('%Y%m%d-%H%M')}_{len(rows)}events.zip")
+
+
+def _log_csv(rows):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["date", "time", "analysis", "event", "overview_video", "plate_video", "culprit_type",
+                "vehicle_class", "plate", "plate_best_guess_unconfirmed", "plate_unclear_characters",
+                "plate_confidence", "plate_source", "plate_frames_agree",
+                "plate_cam_ambiguous", "plate_cam_method", "overview_plate_read", "folder"])
+    for j, ev in rows:
+        _stamp, day, when = _event_when(j, ev)
+        pc = ev.get("platecam") or {}
+        w.writerow([day, when, j["id"], ev["id"], j.get("video_name") or "", j.get("plate_video_name") or "",
+                    ev.get("culprit_type") or "", ev.get("vehicle_class") or "", ev.get("plate_text") or "",
+                    ev.get("plate_guess") or "", ev.get("plate_unclear") or "",
+                    ev.get("plate_conf") if ev.get("plate_conf") is not None else "", ev.get("plate_from") or "",
+                    ev.get("plate_votes") or "", "yes" if pc.get("ambiguous") else "", pc.get("method") or "",
+                    ev.get("plate_overview") or "", f"{j['id']}/{ev['dir']}"])
+    return buf.getvalue().encode()
+
+
+@app.get("/api/events.csv")
+def events_csv():
+    evs = _filter_events(_all_events(), request.args)
+    rows = []
+    for e in evs:
+        j, ev = _event_record(e["job"], e["id"])
+        if ev:
+            rows.append((j, ev))
+    return Response(_log_csv(rows), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=waste_event_log_{time.strftime('%Y%m%d-%H%M')}.csv"})
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()

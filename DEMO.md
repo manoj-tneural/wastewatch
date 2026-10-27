@@ -75,7 +75,10 @@ plate camera.
    - how many plates are read, and whether they are right (check against the plate photo);
    - the match log, which v1 cannot fill in as fully;
    - processing time (the *Speed* figure, or the job times).
-10. **Evidence pack.** **⬇ CSV** gives every event in a spreadsheet: clock time, plate,
+10. **Event log.** Click **Event log** (top of the dashboard) to show every event from every
+    analysis in one list. Search a plate (e.g. `KL07CL2696`) to show the same vehicle across
+    analyses; **⬇ ZIP** downloads one event's evidence with a readable summary.
+11. **Evidence pack.** **⬇ CSV** gives every event in a spreadsheet: clock time, plate,
     best guess and unclear characters, plate type. **⬇ All evidence (ZIP)** adds the photos,
     GIFs and the activity log.
 

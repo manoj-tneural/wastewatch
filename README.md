@@ -26,6 +26,8 @@ clean live view, camera-clock times, matching status).
 | Partial plates | not shown | unclear characters with likely values |
 | Camera sync | traffic, file names as fallback | camera clocks, fine-tuned by traffic |
 | Overview plate reads | yes | no when a plate camera is connected (it always wins) |
+| Culprit matching | order + lane + learned timing (Manoj) | single match; order + lane + learned timing decides when that is ambiguous |
+| Car-window throws | on (Manoj) | available, off by default (`car_window`) |
 
 CLI: `python -m v1.detector …` or `python -m v2.detector …` (same options).
 
@@ -168,6 +170,28 @@ The plate camera is buffered separately at full resolution, 15 frames per second
   out by headlights; no software recovers them. H.265 (not H.265+), 25 fps, max bitrate.
 - Set both cameras to NTP / the NVR's time so their clocks match.
 
+### Matching the culprit across cameras (order + lane + timing)
+Every vehicle the overview saw in the search window is lined up against every vehicle the
+plate camera saw, keeping their order: on one stretch of road vehicles pass both cameras
+in the same order, so two identical white cars cannot swap places. Each pairing is scored on
+vehicle type, colour, lane (distance from the verge, in vehicle widths) and timing.
+- Timing: until the travel time between the cameras is learned, it is estimated from the
+  vehicles in the same window. Clear pairings are stored (`outputs/platecam_calib.json` for
+  v1, `outputs/platecam_calib_v2.json` for v2); after 5 samples the learned time is used.
+- A far-lane overview vehicle that the zoomed plate camera never sees is skipped cheaply.
+- `plate_verge_side` (default `same`): set `left`/`right` if the plate camera is mounted so the
+  verge is on the other side of its picture.
+- v1 always uses it. v2 keeps its single best match and lets order + lane decide only when
+  that match is ambiguous; when the two pick different vehicles the event stays flagged
+  `ambiguous`. On the 20 sample-footage events where they differed, checked by eye: single
+  match 5 right, order + lane 6, the v2 rule 8, with no wrong match left unflagged.
+
+### Car-window throws
+A bag pushed out of a car window toward the verge, then let go (daylight). On in v1. In v2 it
+is available but off (`car_window`): on the sample footage it fired 8 times, all on the green
+median behind cars in the far lanes, and caught no throw. Turn it on to test footage with
+car-window throws.
+
 ## Dashboard
 
 - **Match log**: one row per throw with the clock time, the throw snapshot, the same
@@ -176,6 +200,11 @@ The plate camera is buffered separately at full resolution, 15 frames per second
 - **Detailed activity log**: sync, events, camera matching and plate decisions, also
   saved as `log.txt` in the analysis folder. Evidence, Match log and the activity log
   can each be collapsed.
+- **Event log** (button at the top, or `/events`) lists every event from every analysis,
+  newest first. Search by plate (spaces optional; best guesses count), video or analysis;
+  filter by date, culprit type, "Plate read", "No plate" or "Needs review". Repeat plates are
+  marked. **ZIP** downloads one event's evidence (photos, GIF, `event.json`, `summary.txt`);
+  tick several for **Evidence for selected**; **CSV of this list** exports the filtered list.
 - **Previous analyses** lists every analysis in `outputs/` (newest first), including runs
   cut off by a restart (*interrupted*). A command-line run can be added to it with
   `python -m tools.import_run <out folder> --version v2 --pair source/<pair folder>`.

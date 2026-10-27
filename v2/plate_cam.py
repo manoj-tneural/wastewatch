@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import collections
 import datetime as _dt
+import json
 import os
 import re
 import threading
@@ -500,6 +501,66 @@ def _group_of(cls):
     return "2w" if cls in TWO_WHEELERS else "4w"
 
 
+class Calibration:
+    """What the system has learned about this camera pair from confident matches.
+
+    `delay` is how long after passing the dumping spot a vehicle is at its closest in
+    the plate camera. Kept per mode ("clip" / "live"): clip sync already absorbs part
+    of the travel time, live arrival stamps do not.
+    """
+
+    MIN_SAMPLES = 5
+    KEEP = 60
+
+    def __init__(self, path, key="live", log=print):
+        self.path, self.key, self.log = path, key, log
+        self._lock = threading.Lock()
+
+    def _read(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def delay(self):
+        """(median delay, tolerance) once there are enough samples, else None."""
+        with self._lock:
+            d = self._read().get(self.key, {}).get("delays", [])
+        if len(d) < self.MIN_SAMPLES:
+            return None
+        arr = np.array(d[-self.KEEP:], np.float32)
+        med = float(np.median(arr))
+        mad = float(np.median(np.abs(arr - med))) * 1.4826
+        return med, max(0.8, 2.5 * mad)
+
+    def samples(self):
+        with self._lock:
+            return len(self._read().get(self.key, {}).get("delays", []))
+
+    def add(self, delay):
+        with self._lock:
+            data = self._read()
+            ent = data.setdefault(self.key, {"delays": []})
+            ent["delays"] = (ent.get("delays", []) + [round(float(delay), 3)])[-self.KEEP:]
+            tmp = self.path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=1)
+                os.replace(tmp, self.path)
+            except OSError as e:
+                self.log(f"calibration not saved: {e}")
+
+
+def _pct_ranks(values):
+    """0 for the smallest value, 1 for the largest; ties share a rank."""
+    n = len(values)
+    if n < 2 or max(values) - min(values) < 1e-6:
+        return [0.5] * n
+    order = np.argsort(np.argsort(values, kind="stable"), kind="stable")
+    return [float(o) / (n - 1) for o in order]
+
+
 class _Pass:
     """One vehicle passing the plate camera: its track, best photo and plate crops."""
 
@@ -659,6 +720,101 @@ def _crop(frame, box, pad=0.06):
     x1, y1 = int(max(0, box[0] - pad * bw)), int(max(0, box[1] - pad * bh))
     x2, y2 = int(min(w, box[2] + pad * bw)), int(min(h, box[3] + pad * bh))
     return frame[y1:y2, x1:x2]
+
+
+def _align_passes(context, passes, fw, verge_side, delay):
+    """Pair overview vehicles with plate-camera passes, keeping their order (Manoj's
+    order + lane matching, on v2's vehicle passes).
+
+    On one stretch of road vehicles pass both cameras in the same order, so the overview
+    sequence is lined up against the plate-camera sequence like two lists (a vehicle one
+    camera missed is skipped). Each pairing costs: type (two-wheeler vs car/bus/truck),
+    colour, lane (near-verge pairs with near-verge) and timing (learned travel time, or
+    estimated from this window). Returns (pairs, cost, info, total, solve).
+    """
+    n, m = len(context), len(passes)
+    pl_t = [p.photo[4] for p in passes]                     # time of the biggest view = closest
+    ov_order = sorted(range(n), key=lambda i: context[i]["t_pass"])
+    pl_order = sorted(range(m), key=lambda j: pl_t[j])
+    lane_raw = [min(10.0, float(c.get("lane", 0.0))) for c in context]
+    lane_ov = _pct_ranks(lane_raw)
+
+    def lane_pl(box):
+        bw = max(box[2] - box[0], 1.0)
+        return (box[0] / bw) if verge_side < 0 else ((fw - box[2]) / bw)
+    lane_pv = _pct_ranks([lane_pl(p.photo[3]) for p in passes])
+    hist_ov = [_hist(_unjpeg(c["jpeg"])) if c.get("jpeg") else None for c in context]
+    for p in passes:
+        if p.hist is None:
+            p.hist = _hist(_unjpeg(p.photo[1]))
+    cost = np.zeros((n, m), np.float32)
+    info = {}
+    for i in range(n):
+        for j in range(m):
+            c = context[i]
+            type_ok = _group_of(c["cls"]) == _group_of(passes[j].cls)
+            app = _similar(hist_ov[i], passes[j].hist)
+            dt = pl_t[j] - c["t_pass"]
+            tterm = min(3.0, abs(dt - delay[0]) / delay[1]) if delay is not None else 0.05 * max(0.0, abs(dt) - 3.0)
+            lterm = 0.5 * abs(lane_ov[i] - lane_pv[j]) if n > 1 and m > 1 else 0.0
+            cost[i, j] = (0.0 if type_ok else 2.5) + 1.2 * (1.0 - app) + tterm + lterm
+            info[(i, j)] = {"app": app, "type_ok": type_ok, "dt": dt, "lane": lterm, "time": tterm}
+    skip_ov_cost = [1.5 if lane_raw[i] <= 2.5 else 0.45 for i in range(n)]
+    skip_pl = 0.6
+    INF = 1e9
+
+    def solve(forbid=None):
+        D = np.full((n + 1, m + 1), INF, np.float64)
+        back = np.zeros((n + 1, m + 1), np.int8)
+        D[0, 0] = 0.0
+        for a in range(n + 1):
+            for b in range(m + 1):
+                if a == 0 and b == 0:
+                    continue
+                best, how = INF, 0
+                if a > 0 and b > 0:
+                    i, j = ov_order[a - 1], pl_order[b - 1]
+                    if (i, j) != forbid:
+                        v = D[a - 1, b - 1] + cost[i, j]
+                        if v < best:
+                            best, how = v, 1
+                if a > 0 and D[a - 1, b] + skip_ov_cost[ov_order[a - 1]] < best:
+                    best, how = D[a - 1, b] + skip_ov_cost[ov_order[a - 1]], 2
+                if b > 0 and D[a, b - 1] + skip_pl < best:
+                    best, how = D[a, b - 1] + skip_pl, 3
+                D[a, b], back[a, b] = best, how
+        pairs, a, b = {}, n, m
+        while a > 0 or b > 0:
+            how = back[a, b]
+            if how == 1:
+                pairs[ov_order[a - 1]] = pl_order[b - 1]
+                a, b = a - 1, b - 1
+            elif how == 2:
+                a -= 1
+            else:
+                b -= 1
+        return pairs, float(D[n, m])
+
+    if delay is None and n >= 2:
+        grid = np.arange(-6.0, 6.01, 0.1)
+        votes = np.zeros_like(grid)
+        for i in range(n):
+            best = np.zeros_like(grid)
+            for j in range(m):
+                inf = info[(i, j)]
+                if inf["type_ok"]:
+                    best = np.maximum(best, inf["app"] * np.exp(-((inf["dt"] - grid) / 0.6) ** 2))
+            votes += best
+        k = int(np.argmax(votes))
+        if votes[k] >= 0.8 and votes[k] >= 1.25 * float(np.median(votes) + 1e-6):
+            med, tol = float(grid[k]), 0.8
+            for (i, j), inf in list(info.items()):
+                old = inf["time"]
+                inf["time"] = min(3.0, abs(inf["dt"] - med) / tol)
+                cost[i, j] += inf["time"] - old
+            info["_window_delay"] = (round(med, 2), tol)
+    pairs, total = solve()
+    return pairs, cost, info, total, solve
 
 
 class PlateLogger:
@@ -838,12 +994,17 @@ class PlateLogger:
         while not self.finished and self.processed_t < t_to and time.time() < end:
             time.sleep(0.05)
 
-    def match(self, culprit_jpeg, culprit_cls, t_from, t_to, t_expect, out_dir, label="event"):
+    def match(self, culprit_jpeg, culprit_cls, t_from, t_to, t_expect, out_dir, label="event",
+              context=None, verge_side=-1, calib=None):
         """Find the culprit among the vehicles that passed the plate camera and read its plate.
 
         t_from..t_to   window to search (overview timeline)
         t_expect       (start, end) when the culprit was in the overview view
         label          names the event in the log
+        context        overview vehicles in the window ({"cls", "t_pass", "lane", "jpeg", "culprit"})
+                       for order + lane matching; None = best single match only
+        verge_side     -1 when the verge is on the left of the plate view, +1 on the right
+        calib          Calibration: learned travel time between the cameras
         Returns a dict (see below) for detector._apply_platecam. result["trace"] records
         every step (window, candidates and their scores, both readers, the decision) for
         the dashboard's matching log.
@@ -883,6 +1044,58 @@ class PlateLogger:
         best_score, p, app, gap, type_ok = scored[0]
         same_type = [s for s in scored if s[4]]
         ambiguous = len(same_type) > 1 and same_type[0][1] is p and same_type[0][0] - same_type[1][0] < 0.15
+        method = "best single match"
+        delay = calib.delay() if calib is not None else None
+        # order + lane: line up every overview vehicle with the plate-camera vehicles
+        ci = next((i for i, c in enumerate(context or []) if c.get("culprit")), None)
+        if ci is not None:
+            try:
+                fw = (self.source.width or 1280) * min(1.0, 1280 / max(self.source.width or 1280, 1))
+                pairs, cost, info, total, solve = _align_passes(context, passes, fw, verge_side, delay)
+            except Exception as e:  # noqa: BLE001 - fall back to the single-vehicle score
+                self.log(f"plate camera: order matching failed ({e}), using best single match")
+                pairs = {}
+            if ci in pairs:
+                j = pairs[ci]
+                inf = info[(ci, j)]
+                _p2, total2 = solve(forbid=(ci, j))
+                order_ambiguous = (total2 - total) < 0.35
+                wd = info.get("_window_delay")
+                order_name = "order + lane" + (" + learned timing" if delay else (" + timing from this window" if wd else ""))
+                # the travel time is learned from every clear pairing, whichever method is used
+                if calib is not None:
+                    learned = []
+                    if not order_ambiguous and inf["type_ok"] and inf["app"] >= 0.45:
+                        learned.append(inf["dt"])
+                    for i2, j2 in pairs.items():
+                        if i2 == ci or len(learned) >= 4 or (i2, j2) not in info:
+                            continue
+                        f2 = info[(i2, j2)]
+                        if f2["type_ok"] and f2["app"] >= 0.6 and cost[i2, j2] < 0.7:
+                            learned.append(f2["dt"])
+                    for dt in learned:
+                        calib.add(dt)
+                # Single match first; order + lane decides only when the single match is
+                # ambiguous. Checked by eye on the 20 sample-footage events where the two
+                # differed: single 5 right, order 6, this rule 8. When the two methods pick
+                # different vehicles the match stays flagged for a person to check.
+                if ambiguous:
+                    disagree = passes[j] is not p
+                    p = passes[j]
+                    app, type_ok = inf["app"], inf["type_ok"]
+                    gap = max(0.0, t_expect[0] - p.t1, p.t0 - t_expect[1])
+                    best_score = round(3.2 - float(cost[ci, j]), 3)
+                    ambiguous = order_ambiguous or disagree
+                    method = order_name + (" (single match was ambiguous; the two disagree)" if disagree
+                                           else " (confirms the single match)")
+                    # keep the picked vehicle first, so the trace shows it as the choice
+                    scored.sort(key=lambda s: s[1] is not p)
+                    scored[0] = (best_score, p, app, gap, type_ok)
+                else:
+                    method = "best single match" + (" (order + lane agrees)" if passes[j] is p else
+                                                    " (order + lane differs; single match was clear)")
+            elif len(context) > 1:
+                method = "best single match (culprit not lined up)"
 
         if p.full is None and p.groups:
             p.read_plate(plates)
@@ -900,6 +1113,9 @@ class PlateLogger:
             "match_score": round(best_score, 3), "appearance": round(app, 3),
             "time_gap": round(gap, 2), "type_ok": bool(type_ok), "ambiguous": bool(ambiguous),
             "vehicle_class": VEHICLES.get(p.cls, "vehicle"), "reads_tried": len(p.plates),
+            "method": method, "overview_vehicles": len(context or []),
+            "learned_delay": round(delay[0], 2) if delay else None,
+            "delay_samples": calib.samples() if calib is not None else 0,
             "plate_norm": None, "plate_conf": None, "votes": None, "plate_guess": None, "plate_agree": None,
             "plate_type": (p.full or p.quick or {}).get("plate_type"),
             "seen_from": _fmt_clock(p.t0, live), "seen_to": _fmt_clock(p.t1, live),
@@ -955,7 +1171,7 @@ class PlateLogger:
                         "frames_fused": r.get("used"), "plate_type": r.get("plate_type"),
                         "unclear": plates.unclear_note(r.get("chars")) if r.get("chars") else None}
         second = {"plate": display_plate(leg[0]), "votes": leg[2]} if leg else None
-        result["trace"] = {"window": window, "expected": expect, "culprit_class": want_name,
+        result["trace"] = {"window": window, "expected": expect, "culprit_class": want_name, "method": method,
                            "candidates": [c for c in cands if c["chosen"]], "vehicles_considered": len(passes),
                            "plate_crops": len(p.plates), "new_reader": new_read,
                            "second_reader": second, "decision": decision}
