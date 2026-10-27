@@ -289,29 +289,29 @@
       <div class="kpi"><div class="v" id="kPlate">0</div><div class="l">Plates read</div></div>
     </div>
 
-    <div class="card">
-      <div class="row" style="justify-content:space-between;margin-bottom:12px">
+    <details class="card" id="evidenceSec" open>
+      <summary style="display:flex;justify-content:space-between;align-items:center;margin:0">
         <h2 style="margin:0">Evidence</h2>
-        <div class="row">
-          <a class="btn sm" id="dlCsv" href="#" style="display:none">⬇ CSV</a>
-          <a class="btn sm" id="dlZip" href="#" style="display:none">⬇ All evidence (ZIP)</a>
-        </div>
+      </summary>
+      <div class="row" style="justify-content:flex-end;margin:10px 0">
+        <a class="btn sm" id="dlCsv" href="#" style="display:none">⬇ CSV</a>
+        <a class="btn sm" id="dlZip" href="#" style="display:none">⬇ All evidence (ZIP)</a>
       </div>
       <div id="events" class="events"><div class="empty">Events will appear here as soon as waste throwing is detected.</div></div>
-    </div>
+    </details>
 
-    <div class="card">
-      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+    <details class="card" id="matchSec" open>
+      <summary style="display:flex;justify-content:space-between;align-items:center;margin:0">
         <h2 style="margin:0">Match log</h2>
-        <span style="font-size:12px;color:var(--muted)">Each throw, the same vehicle in the plate camera, and the plate read from it</span>
-      </div>
-      <div class="mlog-wrap">
+        <span style="font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0">Each throw, the same vehicle in the plate camera, and the plate read from it</span>
+      </summary>
+      <div class="mlog-wrap" style="margin-top:10px">
         <table class="mlog">
           <thead><tr><th>Time</th><th>Throw (overview camera)</th><th>Same vehicle (plate camera)</th><th>Plate</th><th>OCR result</th></tr></thead>
           <tbody id="mlogBody"><tr><td colspan="5" class="empty">Rows appear here as each throw is matched to the plate camera.</td></tr></tbody>
         </table>
       </div>
-    </div>
+    </details>
 
     <details class="card" id="actLog">
       <summary style="display:flex;justify-content:space-between;align-items:center;margin:0">
@@ -591,8 +591,9 @@ function plateMarked(display, chars){
   return [...display].map(ch => {
     if(ch===' ') return ' ';
     const c = chars[k++];
-    if(!c || c.p >= 0.7) return esc(ch);
-    const alts = (c.alt||[]).map(a => `${a[0]} ${Math.round(a[1]*100)}%`).join(', ');
+    if(!c || !(c.unclear ?? c.p < 0.7)) return esc(ch);
+    const alts = (c.alt||[]).map(a => `${a[0]} ${Math.round(a[1]*100)}%`).join(', ')
+                 + (c.looks && c.looks.length ? `; looks like ${c.looks.join('/')}` : '');
     return `<span class="uc" title="Unclear: ${esc(alts)}">${esc(ch)}</span>`;
   }).join('');
 }
@@ -765,6 +766,11 @@ async function loadHistory(){
 $('#history').onfocus = () => { if(!$('#history')._busy){ $('#history')._busy = true; loadHistory().finally(()=>{ $('#history')._busy = false; }); } };
 $('#history').onchange = e => { if(e.target.value){ $('#live').style.display='none'; $('#livePh').style.display='block'; $('#livePh').textContent='Viewing saved analysis'; openJob(e.target.value,false);} };
 
+['evidenceSec','matchSec','actLog'].forEach(id => {
+  const el = document.getElementById(id);
+  try { const v = localStorage.getItem('ww:open:'+id); if(v!==null) el.open = v==='1'; } catch(e) {}
+  el.addEventListener('toggle', () => { try { localStorage.setItem('ww:open:'+id, el.open?'1':'0'); } catch(e) {} });
+});
 loadVideos(); loadHistory(); loadPairFolders();
 </script>
 </body>

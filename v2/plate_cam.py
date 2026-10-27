@@ -511,8 +511,10 @@ class _Pass:
         self.cls_votes = collections.Counter()
         self.box = None
         self.photo = None              # (score, vehicle crop jpeg, scene jpeg, box, t)
-        self.plate_photo = None        # the same, from the frame of the best plate crop, + plate box
-        self.plates = []               # (score, plate crop)
+        # plate candidates grouped by where they sit on the vehicle (rear middle, rear
+        # left, side...): each group is {"pos", "n", "plates": [(score, crop)], "photo"}
+        self.groups = []
+        self.chosen = None             # index of the group the plate was read from
         self.views = []                # (score, vehicle crop jpeg) for the second-opinion reader
         self.seen = 0
         self.quick = None              # quick read, done when the vehicle leaves
@@ -523,14 +525,67 @@ class _Pass:
     def cls(self):
         return self.cls_votes.most_common(1)[0][0] if self.cls_votes else 2
 
-    def add_plate(self, score, crop):
-        self.plates.append((score, crop))
-        if len(self.plates) > self.keep_plates:
-            self.plates.sort(key=lambda p: -p[0])
-            del self.plates[self.keep_plates:]
+    @property
+    def plates(self):
+        return [q for g in self.groups for q in g["plates"]]
 
-    def best_plates(self):
-        return [c for _, c in sorted(self.plates, key=lambda q: -q[0])]
+    def add_plate(self, score, crop, pos, photo=None):
+        """Add a plate crop to the group at this position on the vehicle (or a new group).
+        photo() makes the evidence photo; it is called only when this is the group's best."""
+        best = None
+        for g in self.groups:
+            d = max(abs(g["pos"][0] - pos[0]), abs(g["pos"][1] - pos[1]))
+            if d < 0.18 and (best is None or d < best[0]):
+                best = (d, g)
+        if best is None:
+            if len(self.groups) >= 4:
+                return
+            g = {"pos": pos, "n": 0, "plates": [], "photo": None}
+            self.groups.append(g)
+        else:
+            g = best[1]
+        g["n"] += 1
+        g["pos"] = tuple(a + (b - a) / g["n"] for a, b in zip(g["pos"], pos))
+        g["plates"].append((score, crop))
+        if len(g["plates"]) > self.keep_plates:
+            g["plates"].sort(key=lambda q: -q[0])
+            del g["plates"][self.keep_plates:]
+        if photo is not None and (g["photo"] is None or score > g["photo"][0]):
+            g["photo"] = photo()
+
+    def best_plates(self, group=None):
+        src = self.groups[group]["plates"] if group is not None else self.plates
+        return [c for _, c in sorted(src, key=lambda q: -q[0])]
+
+    @property
+    def plate_photo(self):
+        """Evidence photo from the frame where the plate that was read is clearest."""
+        if self.chosen is not None:
+            return self.groups[self.chosen]["photo"]
+        g = max(self.groups, key=lambda g: g["n"], default=None)
+        return g["photo"] if g else None
+
+    def read_plate(self, plates_mod):
+        """Thorough read of this vehicle's plate. With plate candidates in more than one
+        place on the vehicle, the two most seen are read and the clearer result is kept."""
+        if self.full is not None or not self.groups:
+            return self.full
+        order = sorted(range(len(self.groups)), key=lambda i: -self.groups[i]["n"])[:2]
+        results = []
+        for i in order:
+            if i != order[0] and self.groups[i]["n"] < 2:
+                continue                       # one sighting elsewhere is usually a sticker
+            r = plates_mod.read_plate_views(self.best_plates(i), thorough=True)
+            if r is not None:
+                results.append((i, r))
+        if not results:
+            return None
+
+        def rank(item):
+            i, r = item
+            return (r["status"] == "ok", r.get("norm") is not None, r.get("conf") or 0, self.groups[i]["n"])
+        self.chosen, self.full = max(results, key=rank)
+        return self.full
 
     def add_view(self, score, jpeg, keep=24):
         """Views spread over the whole pass: when full, every other one is dropped.
@@ -745,18 +800,20 @@ class PlateLogger:
             px2, py2 = int(min(W, box[2] + 0.15 * bw)), int(min(H, box[3] + 0.15 * bh))
             search = clean[py1:py2, px1:px2]
             inner = (box[0] - px1, box[1] - py1, box[2] - px1, box[3] - py1)
-            for crop, pb, pc in plates.find_plates(search, min_w=28, inner=inner)[:1]:
+            # up to two plates per view: some vehicles carry one at the rear and one at the side
+            for crop, pb, pc, pos in plates.find_plates(search, min_w=28, inner=inner, with_pos=True)[:2]:
                 g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
                 sharp = float(cv2.Laplacian(g, cv2.CV_32F).var())
                 pscore = np.sqrt(sharp) * min(crop.shape[1], 220) * pc
-                p.add_plate(pscore, crop)
-                if p.plate_photo is None or pscore > p.plate_photo[0]:
-                    # evidence photo: the frame where this vehicle's plate is clearest
+
+                def photo(pscore=pscore, pb=pb, box=box):
+                    # evidence photo: the frame where this plate is clearest
                     sc = min(1.0, 1280 / W)
                     scene = cv2.resize(frame, (int(W * sc), int(H * sc)), interpolation=cv2.INTER_AREA)
                     pbox = [(pb[0] + px1) * sc, (pb[1] + py1) * sc, (pb[2] + px1) * sc, (pb[3] + py1) * sc]
-                    p.plate_photo = (pscore, _jpeg(_crop(frame, box, pad=0.06), 92), _jpeg(scene, 88),
-                                     [v * sc for v in box], t, pbox)
+                    return (pscore, _jpeg(_crop(frame, box, pad=0.06), 92), _jpeg(scene, 88),
+                            [v * sc for v in box], t, pbox)
+                p.add_plate(pscore, crop, pos, photo)
         seen_now = {d[0] for d in dets}
         with self.lock:
             for tid in [tid for tid, p in self.active.items() if tid not in seen_now and t - p.t1 > 0.8]:
@@ -827,8 +884,8 @@ class PlateLogger:
         same_type = [s for s in scored if s[4]]
         ambiguous = len(same_type) > 1 and same_type[0][1] is p and same_type[0][0] - same_type[1][0] < 0.15
 
-        if p.full is None and p.plates:
-            p.full = plates.read_plate_views(p.best_plates(), thorough=True)
+        if p.full is None and p.groups:
+            p.read_plate(plates)
         if getattr(p, "legacy", "unset") == "unset":
             # second opinion only when the main reader is not sure
             sure = p.full is not None and p.full.get("status") == "ok"

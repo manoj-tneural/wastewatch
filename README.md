@@ -125,6 +125,13 @@ means two similar vehicles passed together — check the photo before issuing a 
   and the reads agree on its length. Otherwise it is a **best guess** (`uncertain`),
   shown with a warning and kept in its own CSV column, for a person to check against the
   plate photo.
+- Look-alike characters on blurred plates (H/M; I/L/J/1/7; 3/6/8/9/0; 4/A) need an 85%
+  majority to count as clear, against 70% for others, and an unclear one lists its
+  look-alikes that fit the slot. Series letters are never I or O (Indian rule), so such a
+  read becomes the look-alike letter.
+- A vehicle's plate candidates are grouped by where they sit on it (rear middle, rear
+  left, side); the most seen groups are read and the clearer result is kept, so a
+  sticker or lettering elsewhere on the vehicle is not read as the plate.
 - Partial reads show which characters are clear. An unclear character is shown as its
   most likely value (highlighted), with the other possible values and their share of the
   reads, e.g. `10th: 6 (55%) or 0 (43%)`. Only values that fit the slot are offered: a

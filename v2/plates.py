@@ -40,6 +40,11 @@ _CONFUSABLE = {"E": "LF", "L": "EI", "F": "EP", "K": "XR", "X": "K", "H": "NM", 
                "O": "DQ", "D": "O", "Q": "O", "V": "UYK", "U": "V", "P": "RF", "R": "PB", "B": "R",
                "C": "G", "G": "C", "T": "I", "I": "TL", "J": "I", "W": "VK", "Y": "V"}
 # (name, slot kinds). L = letter, D = digit. Standard series first, BH series last.
+# Characters that look alike on a blurred plate. A character from one of these groups
+# needs a stronger majority to count as clear, and an unclear one lists its look-alikes.
+LOOKALIKE = ("HM", "ILJ17", "36890", "4A")
+# Indian registration series never use I or O (too like 1 and 0)
+NOT_IN_SERIES = "IO"
 _TEMPLATES = []
 for _d in (2, 1):
     for _l in (2, 1, 3):
@@ -406,35 +411,77 @@ def vote(reads):
     # a dropped or extra character moves a read to another pattern: the winner must hold
     # most of the evidence, or the plate is not certain
     share = total / sum(w for its in by_tmpl.values() for _, w in its)
-    chars, agree, alts = [], [], []
+    series = _series_slots(kinds)
+    chars, agree, alts, looks = [], [], [], []
     for i in range(len(kinds)):
         c = collections.Counter()
         for plate, w in items:
             c[plate[i]] += w
+        if i in series:
+            # no series uses I or O: such a read is the look-alike letter
+            for bad, good in (("I", "L"), ("O", "D")):
+                if bad in c:
+                    w_bad = c.pop(bad)
+                    if not c:
+                        c[good] += w_bad
         ch, cw = c.most_common(1)[0]
         chars.append(ch)
         agree.append(cw / total)
         # every value this position could be (all fit the slot: letter or digit), most likely first
         alts.append([[a, round(aw / total, 2)] for a, aw in c.most_common(3)])
+        looks.append(_lookalikes(ch, kinds[i], i in series, exclude={a for a, _ in c.most_common(3)}))
     norm = _fix_state("".join(chars))
     if not valid_plate(norm):
         return None
     support = sum(1 for p, _ in items if p == norm)
+    out_chars = []
+    for i in range(len(norm)):
+        need = UNCLEAR_LOOKALIKE if any(norm[i] in g for g in LOOKALIKE) else UNCLEAR
+        out_chars.append({"c": norm[i], "p": round(agree[i], 2), "alt": alts[i], "looks": looks[i],
+                          "unclear": agree[i] < need})
     return {"norm": norm, "agree": [round(a, 2) for a in agree], "support": support,
-            "reads": len(items), "weight": round(total, 2), "share": round(share, 2),
-            "chars": [{"c": norm[i], "p": round(agree[i], 2), "alt": alts[i]} for i in range(len(norm))]}
+            "reads": len(items), "weight": round(total, 2), "share": round(share, 2), "chars": out_chars}
 
 
-UNCLEAR = 0.7          # a character with less agreement than this is shown as unclear
+def _series_slots(kinds):
+    """Positions of the series letters in a template (the letters before the last number)."""
+    if kinds.startswith("LL"):
+        d = len(kinds[2:]) - len(kinds[2:].lstrip("D"))
+        n = len(kinds[2 + d:]) - len(kinds[2 + d:].lstrip("L"))
+        return set(range(2 + d, 2 + d + n))
+    n = len(kinds) - len(kinds.rstrip("L"))              # BH series: the letters at the end
+    return set(range(len(kinds) - n, len(kinds)))
+
+
+def _lookalikes(ch, kind, in_series, exclude=()):
+    """Characters that look like `ch` and fit this slot (digits for a digit, letters for a letter)."""
+    out = []
+    for g in LOOKALIKE:
+        if ch in g:
+            for a in g:
+                if a == ch or a in exclude:
+                    continue
+                if (kind == "D") != a.isdigit():
+                    continue
+                if in_series and a in NOT_IN_SERIES:
+                    continue
+                out.append(a)
+    return out
+
+
+UNCLEAR = 0.7            # a character with less agreement than this is shown as unclear
+UNCLEAR_LOOKALIKE = 0.85  # ... or this, for a character that has look-alikes (H/M, 1/7/I/L/J, 3/6/8/9/0, 4/A)
 
 
 def unclear_note(chars):
-    """'10th: 6 (55%) or 0 (40%)' for every unclear character; '' when all are clear."""
+    """'10th: 6 (55%) or 0 (40%), looks like 3/8/9' for every unclear character; '' when all are clear."""
     out = []
     for i, ch in enumerate(chars or []):
-        if ch["p"] >= UNCLEAR:
+        if not ch.get("unclear", ch["p"] < UNCLEAR):
             continue
         opts = " or ".join(f"{a} ({round(p * 100)}%)" for a, p in ch["alt"])
+        if ch.get("looks"):
+            opts += ", looks like " + "/".join(ch["looks"])
         n = i + 1
         suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
         out.append(f"{n}{suffix}: {opts}")
@@ -483,6 +530,8 @@ def read_plate_views(crops, thorough=True, min_agree=0.7, min_reads=6):
     # ok = every character backed by a clear majority AND the reads agree on the plate's
     # length; a near-unanimous read may have some reads in another pattern
     sure = (low >= 0.95 and v["share"] >= 0.6) or (low >= min_agree and v["share"] >= 0.85)
+    # and no look-alike character that is only narrowly ahead (8 vs 6, H vs M, 1 vs 7...)
+    sure = sure and not any(c["unclear"] for c in v["chars"])
     # and the number must come from at least three frames: two can share the same blur
     status = "ok" if sure and v["reads"] >= min_reads and used >= 3 else "uncertain"
     return {"norm": v["norm"], "display": display_plate(v["norm"]), "conf": round(low, 3), "status": status,
@@ -491,12 +540,16 @@ def read_plate_views(crops, thorough=True, min_agree=0.7, min_reads=6):
             "colour": colour, "plate_type": PLATE_TYPES[colour]}
 
 
-def find_plates(vehicle_bgr, min_w=24, inner=None):
-    """Plate crops on one vehicle image, best first: [(crop, box, score)].
+def find_plates(vehicle_bgr, min_w=24, inner=None, with_pos=False):
+    """Plate crops on one vehicle image, best first: [(crop, box, score)], or with
+    with_pos=True [(crop, box, score, (rx, ry))] where rx, ry is the plate centre as a
+    fraction of the vehicle box.
 
     inner: the vehicle's own box inside this image (x1, y1, x2, y2). The image may be
     padded around it so a plate on the bumper edge is not cut; a plate belongs to the
     vehicle when its centre is inside that box and not in its top fifth (a vehicle ahead).
+    No position is preferred: cars carry the plate in the middle of the bumper, but many
+    trucks, vans and autos carry it at the rear left, or on the side as well.
     """
     eng = _Engine.get()
     H, W = vehicle_bgr.shape[:2]
@@ -510,7 +563,11 @@ def find_plates(vehicle_bgr, min_w=24, inner=None):
             continue
         if b[0] <= 0 or b[2] >= W - 1:      # cut by the picture itself
             continue
-        out.append((plate_box_crop(vehicle_bgr, b), b, b[4] * (1.0 - 0.5 * abs(rx - 0.5))))
+        aspect = (b[2] - b[0]) / max(b[3] - b[1], 1)
+        if not 1.0 <= aspect <= 6.5:         # one-line plates ~2.5-5, two-line ~1.3-2.2
+            continue
+        crop = plate_box_crop(vehicle_bgr, b)
+        out.append((crop, b, b[4], (rx, ry)) if with_pos else (crop, b, b[4]))
     return sorted(out, key=lambda o: -o[2])
 
 
